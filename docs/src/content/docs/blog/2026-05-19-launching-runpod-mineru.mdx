@@ -35,7 +35,7 @@ The trick is **scale-to-zero**. RunPod bills per-second; when no one's calling, 
 
 ### 1. Get a RunPod account
 
-[Sign up here](https://runpod.io?ref=31jdfpnq) (full disclosure: that's a referral link — costs you nothing extra, helps me keep maintaining the repo). Add $5 of credit. That's enough for several million pages.
+[Sign up here](https://runpod.io?ref=31jdfpnq). <small>Full disclosure: that's a referral link — costs you nothing extra, helps me keep maintaining the repo.</small> Add $5 of credit. That's enough for several million pages.
 
 ### 2. Fork the repo
 
@@ -112,7 +112,7 @@ For a document indexer, you'd typically read `content_list_v2.json`, group entri
 ## What worked, what surprised me
 
 - **The model loads once and stays warm.** With FlashBoot enabled, repeat calls land on a hot worker for free. My P50 cold start was 12 s, P95 was 28 s. Compare to ~60 s without FlashBoot.
-- **Inline base64 images** are easier than I expected — MinerU embeds them directly in the JSON, so the client side just decodes when it wants files on disk.
+- **Inline base64 images** are easier than I expected — MinerU embeds them directly in the JSON, and the client decodes them on demand when it wants files on disk.
 - **Multi-language is real.** I tested on a Japanese document and got clean Markdown with the tables preserved. 84 languages supported.
 - **The `idle_timeout=10s` is aggressive but works.** For spiky workloads (a user uploading 50 documents in a minute), the first parse pays a cold start, the next 49 are warm. For one-off requests every few minutes, you pay one cold start each time.
 
@@ -136,4 +136,4 @@ I'm running it in production for a document indexer right now. If you build some
 
 ---
 
-If this saved you time, [signing up for RunPod through this link](https://runpod.io?ref=31jdfpnq) is the easiest way to say thanks. Star the [repo on GitHub](https://github.com/sergeyshmakov/runpod-mineru) for updates.
+If this saved you time, the easiest way to say thanks is [signing up for RunPod through this referral link](https://runpod.io?ref=31jdfpnq). <small>Full disclosure: it credits me back at no cost to you.</small> Star the [repo on GitHub](https://github.com/sergeyshmakov/runpod-mineru) for updates.

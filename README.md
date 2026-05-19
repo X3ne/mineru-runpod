@@ -10,7 +10,7 @@
 
 Generic, reusable [MinerU 2.5](https://github.com/opendatalab/MinerU) PDF-parsing service running on [RunPod Serverless](https://runpod.io?ref=31jdfpnq). **Scales to zero**, idles in seconds, **costs cents per document**.
 
-This repo intentionally knows nothing about any specific project. Callers (a document indexer, a RAG pipeline, anything that needs PDF → structured Markdown/JSON) just `pip install` the client package and submit jobs.
+This repo intentionally knows nothing about any specific project. Callers (a document indexer, a RAG pipeline, anything that needs PDF → structured Markdown/JSON) `pip install` the client package and submit jobs against their endpoint id.
 
 ## 30-second taste
 
@@ -98,7 +98,7 @@ Full contract lives in [handler.py](handler.py) — keep that file as the source
 
 This repo is published as a public Hub template. In the RunPod dashboard go to **The Hub → Serverless repos**, find `runpod-mineru`, click Deploy. RunPod builds the image on your account, you pick a GPU pool, and you get an endpoint id — no fork, no clone, no local setup.
 
-This is the recommended path if you just want to parse PDFs.
+This is the recommended path if your goal is parsing PDFs, not customising the worker.
 
 ### Option B — Fork and auto-build (for customization)
 
