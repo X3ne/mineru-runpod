@@ -10,7 +10,7 @@
 
 Serverless [MinerU 2.5](https://github.com/opendatalab/MinerU) PDF parser on [RunPod](https://runpod.io?ref=31jdfpnq). Scales to zero, ~$0.0001 per page, ten minutes from sign-up to first parse.
 
-**[📚 Docs](https://sergeyshmakov.github.io/runpod-mineru/)**  ·  **[🚀 Deploy on RunPod Hub](https://runpod.io?ref=31jdfpnq)**  ·  **[📝 Blog](https://sergeyshmakov.github.io/runpod-mineru/blog/)**
+**📚 [Docs](https://sergeyshmakov.github.io/runpod-mineru/)**  ·  **🚀 [Deploy on RunPod Hub](https://runpod.io?ref=31jdfpnq)**  ·  **📝 [Blog](https://sergeyshmakov.github.io/runpod-mineru/blog/)**
 
 ## 30-second taste
 
