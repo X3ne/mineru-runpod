@@ -3,6 +3,7 @@
 .gitignore
 .env
 .env.example
+test_input.json
 .venv/
 __pycache__/
 *.pyc

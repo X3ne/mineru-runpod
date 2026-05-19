@@ -37,10 +37,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /worker
 
+# Install uv (10x+ faster than pip on resolution-heavy installs like
+# mineru[core,vllm], which churns through pydantic / opencv / numpy
+# version conflicts with the base image). Negligible image size (~10 MB)
+# in exchange for a meaningful build-time win.
+RUN pip install --no-cache-dir uv
+
 # Install MinerU + RunPod worker SDK. mineru[core,vllm] pulls the VLM-engine
 # dependencies that match the vllm version in the base image.
 COPY requirements.txt /worker/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN uv pip install --system --no-cache -r requirements.txt
 
 # Pre-cache MinerU weights into the image. Adds ~2.5 GB to the image but
 # eliminates the model download on first cold start (~60-90 s of latency
