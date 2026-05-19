@@ -15,12 +15,18 @@
 ARG VLLM_VERSION=v0.6.6
 FROM vllm/vllm-openai:${VLLM_VERSION}
 
-# Keep Python noise down, write cache to a single root.
+# Keep Python noise down, write cache to a single root. Override MinerU's
+# default model (MinerU2.5-2509-1.2B) to the Pro variant (2604-1.2B) which
+# is what this template documents and pre-caches below. Experiment to
+# verify MINERU_VL_MODEL_NAME is respected by the local vlm-vllm-async-engine
+# backend (docs hint it's for remote openai-server use; live build will
+# confirm).
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     HF_HOME=/root/.cache/huggingface \
-    TRANSFORMERS_OFFLINE=0
+    TRANSFORMERS_OFFLINE=0 \
+    MINERU_VL_MODEL_NAME=opendatalab/MinerU2.5-Pro-2604-1.2B
 
 # vllm-openai inherits an entrypoint that launches the OpenAI server. Override
 # it so our handler can be the process.
