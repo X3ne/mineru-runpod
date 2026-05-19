@@ -1,3 +1,13 @@
+## [1.1.3](https://github.com/sergeyshmakov/runpod-mineru/compare/v1.1.2...v1.1.3) (2026-05-19)
+
+### Bug Fixes
+
+* **hub:** correct GPU pool IDs (ADA_48 → ADA_48_PRO) ([844f1be](https://github.com/sergeyshmakov/runpod-mineru/commit/844f1befcf45bd0a24c10905d429d3aa531e5dc5))
+
+### Documentation
+
+* update docs stylings ([c512a90](https://github.com/sergeyshmakov/runpod-mineru/commit/c512a90ecb67d3d2de05b1845f5cfa1269821140))
+
 ## [1.1.2](https://github.com/sergeyshmakov/runpod-mineru/compare/v1.1.1...v1.1.2) (2026-05-19)
 
 ### Bug Fixes
