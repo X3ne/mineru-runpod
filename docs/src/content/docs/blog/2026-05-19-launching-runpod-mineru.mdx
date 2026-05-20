@@ -85,8 +85,8 @@ client = MineruClient(
     api_key="<your-runpod-api-key>",
 )
 
-result = client.parse_pdf(
-    pdf_url="https://example.com/report.pdf",
+result = client.parse_document(
+    file_url="https://example.com/report.pdf",
     end_page=4,  # smoke test on first 5 pages
 )
 print(result["mineru_version"], "in", result["elapsed_seconds"], "s")
@@ -113,13 +113,13 @@ For a document indexer, you'd typically read `content_list_v2.json`, group entri
 
 - **The model loads once and stays warm.** With FlashBoot enabled, repeat calls land on a hot worker for free. My P50 cold start was 12 s, P95 was 28 s. Compare to ~60 s without FlashBoot.
 - **Inline base64 images** are easier than I expected. MinerU embeds them directly in the JSON, and the client decodes them on demand when it wants files on disk.
-- **Multi-language is real.** I tested on a Japanese document and got clean Markdown with the tables preserved. 84 languages supported.
+- **Multi-language is real.** I tested on a Japanese document and got clean Markdown with the tables preserved. 109 languages supported via the pipeline backend.
 - **The `idle_timeout=10s` is aggressive but works.** For spiky workloads (a user uploading 50 documents in a minute), the first parse pays a cold start, the next 49 are warm. For one-off requests every few minutes, you pay one cold start each time.
 
 ## What I'd watch out for
 
 - **Cost ceiling on long jobs.** A 5,000-page document is roughly **~18 min** at 5 p/s. Set `execution_timeout` accordingly; the repo defaults to 900 s (good for ~250 pages), bump it for full books.
-- **PDF size for inline transport.** Inline base64 jobs cap around 10 MB. For bigger files, pass a `pdf_url` and let the worker fetch.
+- **File size for inline transport.** Inline base64 jobs cap around 10 MB. For bigger files, pass a `file_url` and let the worker fetch.
 - **Cold-start tax under low traffic.** If your usage pattern is "1 document every 30 minutes", scale-to-zero is wasted; you're always paying cold starts. Either bump `idle_timeout` or run `workers_min=1`.
 
 ## Where to next

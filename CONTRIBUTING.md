@@ -21,7 +21,7 @@ If you're not sure, open an issue here and we'll redirect.
 
 Please include:
 - The exact `deploy.py` command you ran (with secrets redacted)
-- The `MineruClient.parse_pdf(...)` call (input shape, not the PDF itself)
+- The `MineruClient.parse_document(...)` call (input shape, not the file contents itself)
 - The full handler response — especially the `error` and `traceback` fields if `ok: false`
 - The MinerU version reported in the response (`mineru_version`)
 - The RunPod endpoint id and approximate timestamp so we can correlate with platform logs if needed
@@ -53,7 +53,7 @@ Types that **trigger a release**:
 | `feat:` | minor | `feat(client): add streaming response support` |
 | `fix:` | patch | `fix(handler): handle PDFs with empty page_range` |
 | `perf:` | patch | `perf(handler): stream tarball instead of buffering` |
-| `refactor:` | patch | `refactor(client): split parse_pdf into smaller helpers` |
+| `refactor:` | patch | `refactor(client): split parse_document into smaller helpers` |
 | `revert:` | patch | `revert: revert "feat: streaming response"` |
 
 Types that **do not** trigger a release:
@@ -70,9 +70,9 @@ Types that **do not** trigger a release:
 **Breaking changes** force a major bump regardless of type:
 
 ```
-feat(client)!: rename parse_pdf to parse
+feat(client)!: rename parse_document to parse
 
-BREAKING CHANGE: parse_pdf is now parse. Callers must update imports.
+BREAKING CHANGE: parse_document is now parse. Callers must update imports.
 ```
 
 Commitlint runs on every PR — bad messages will be rejected. Locally you can preview with `npx commitlint --from HEAD~1 --to HEAD --verbose`.

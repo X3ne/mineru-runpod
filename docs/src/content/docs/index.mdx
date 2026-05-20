@@ -1,10 +1,10 @@
 ---
 title: runpod-mineru
-description: Open-source template to deploy MinerU 2.5 onto RunPod Serverless in two clicks. Your endpoint, scales to zero, ~$0.0001 per page.
+description: Open-source template to deploy MinerU (3.1 runtime, 2.5 Pro VLM) onto RunPod Serverless in two clicks. Your endpoint, scales to zero, ~$0.0001 per page.
 template: splash
 hero:
   title: Deploy <br/>MinerU 2.5 Pro <br/>on RunPod <br/><span class="rm-accent">in two clicks</span>
-  tagline: Open-source template that wires the SOTA MinerU 2.5 PDF parser onto your own RunPod Serverless endpoint. ~$0.0001 per page, scales to zero.
+  tagline: Open-source template that wires the SOTA MinerU PDF parser onto your own RunPod Serverless endpoint. MinerU 3.1.x runtime running the `MinerU2.5-Pro-2604-1.2B` VLM. ~$0.0001 per page, scales to zero.
   image:
     html: |
       <img src="/runpod-mineru/promo_bg.png" alt="PDF transformed to Markdown by a serverless cloud" class="rm-hero-promo" loading="eager" decoding="async" width="1024" height="1024" />
@@ -30,13 +30,13 @@ import { Card, CardGrid } from "@astrojs/starlight/components";
 
 This is an open-source repo and [RunPod Hub](https://runpod.io?ref=31jdfpnq) template — not a hosted service. Fork it, deploy from the Hub, and the worker runs on **your** RunPod account against **your** wallet.
 
-Under the hood it's one Docker image wrapping [MinerU 2.5](https://github.com/opendatalab/MinerU). Send a PDF as a URL, base64 blob, or path on a mounted volume. Get back Markdown, a structured `content_list`, the raw `middle.json`, and extracted images. When traffic stops, RunPod tears the worker down in seconds.
+Under the hood it's one Docker image wrapping [MinerU](https://github.com/opendatalab/MinerU) (3.1.x runtime, `MinerU2.5-Pro-2604-1.2B` VLM by default). Send a PDF as a URL, base64 blob, or path on a mounted volume. Get back Markdown, a structured `content_list`, the raw `middle.json`, and extracted images. When traffic stops, RunPod tears the worker down in seconds.
 
 ## What you get
 
 <CardGrid>
   <Card title="State-of-the-art accuracy" icon="seti:json">
-    The 1.2B MinerU VLM tops [OmniDocBench](https://github.com/opendatalab/OmniDocBench) for text, tables, formulas, and reading order — across 84 languages, handwriting included.
+    The 1.2B MinerU VLM tops [OmniDocBench](https://github.com/opendatalab/OmniDocBench) for text, tables, formulas, and reading order. Combined with the pipeline backend, 109 languages of OCR, handwriting included.
   </Card>
   <Card title="Pay per second, not per hour" icon="rocket">
     `idle_timeout=10` + FlashBoot means a 100-page doc lands for about $0.01. No worker running? No bill.
@@ -55,7 +55,7 @@ Under the hood it's one Docker image wrapping [MinerU 2.5](https://github.com/op
 from mineru_client import MineruClient
 
 client = MineruClient(endpoint_id="<your-endpoint-id>")
-result = client.parse_pdf(pdf_url="https://example.com/report.pdf", end_page=4)
+result = client.parse_document(file_url="https://example.com/report.pdf", end_page=4)
 client.save_tarball(result, "./out/doc")
 # → markdown + content_list + middle.json + images
 ```

@@ -26,7 +26,7 @@ body:
     id: repro
     attributes:
       label: Reproduction
-      description: Minimal steps to reproduce. Include the exact `parse_pdf(...)` call or job input.
+      description: Minimal steps to reproduce. Include the exact `parse_document(...)` call or job input.
       render: python
     validations:
       required: true
@@ -36,7 +36,7 @@ body:
     attributes:
       label: Handler response
       description: |
-        The full response from `MineruClient.parse_pdf(...)` (or the RunPod job
+        The full response from `MineruClient.parse_document(...)` (or the RunPod job
         output). Especially the `error` and `traceback` fields if `ok: false`.
       render: json
 
@@ -44,7 +44,7 @@ body:
     id: mineru-version
     attributes:
       label: MinerU version (from handler response)
-      placeholder: "2.5.x"
+      placeholder: "3.1.x"
 
   - type: input
     id: gpu

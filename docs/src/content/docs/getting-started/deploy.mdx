@@ -49,7 +49,7 @@ This skips RunPod's auto-build entirely. Use it when you need custom base images
 
 | Setting | Value | Why |
 |---|---|---|
-| `gpu_ids` | `AMPERE_24` | 24 GB A5000 / 3090 class. Fits the [MinerU 2.5 1.2B VLM](https://huggingface.co/opendatalab/MinerU2.5-Pro-2604-1.2B) comfortably with KV cache. |
+| `gpu_ids` | `AMPERE_24` | 24 GB A5000 / 3090 class. Fits the [`MinerU2.5-Pro-2604-1.2B` VLM](https://huggingface.co/opendatalab/MinerU2.5-Pro-2604-1.2B) comfortably with KV cache. |
 | `idle_timeout` | `10 s` | Scale workers to zero after 10 s of inactivity |
 | `workers_min` | `0` | Pay only when processing |
 | `workers_max` | `3` | Concurrency cap; bump for production |

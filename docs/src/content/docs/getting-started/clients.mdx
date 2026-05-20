@@ -17,7 +17,7 @@ pip install "mineru-client @ git+https://github.com/sergeyshmakov/runpod-mineru@
 from mineru_client import MineruClient
 
 client = MineruClient(endpoint_id="<your-endpoint-id>")
-result = client.parse_pdf(pdf_url="https://example.com/report.pdf", end_page=4)
+result = client.parse_document(file_url="https://example.com/report.pdf", end_page=4)
 client.save_tarball(result, "./out/doc")
 ```
 
@@ -26,7 +26,7 @@ That's it. The wrapper builds the JSON payload, calls `/runsync` via the RunPod 
 ### What `MineruClient` gives you
 
 - Boilerplate reduction (~30 lines of payload-building collapsed to one call)
-- XOR validation on the three input transports (`pdf_url` / `pdf_b64` / `volume_path`)
+- XOR validation on the three input transports (`file_url` / `file_b64` / `volume_path`)
 - Typed exception (`MineruClientError`) for handler-side errors
 - Helpers for unpacking tarball or inline responses to disk
 
@@ -52,7 +52,7 @@ runpod.api_key = "..."
 endpoint = runpod.Endpoint("<endpoint-id>")
 result = endpoint.run_sync({
     "input": {
-        "pdf_url": "https://example.com/report.pdf",
+        "file_url": "https://example.com/report.pdf",
         "start_page": 0,
         "end_page": 99,
         "return": "tarball_b64",
@@ -70,7 +70,7 @@ import httpx
 r = httpx.post(
     f"https://api.runpod.ai/v2/{endpoint_id}/runsync",
     headers={"Authorization": f"Bearer {api_key}"},
-    json={"input": {"pdf_url": "https://example.com/report.pdf"}},
+    json={"input": {"file_url": "https://example.com/report.pdf"}},
     timeout=900,
 )
 result = r.json()["output"]
@@ -108,7 +108,7 @@ Either path returns the same handler response. Success:
   "ok": true,
   "elapsed_seconds": 18.4,
   "pages_processed": 100,
-  "mineru_version": "2.5.x",
+  "mineru_version": "3.1.x",
   "source": "url:https://...",
   "tarball_b64": "..."
 }

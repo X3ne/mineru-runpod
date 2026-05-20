@@ -12,11 +12,11 @@ Send a POST to `/v2/{endpoint_id}/runsync` (or `/run` for async) with an `input`
 ```json
 {
   "input": {
-    "pdf_url":        "https://example.com/report.pdf",
+    "file_url":       "https://example.com/report.pdf",
     "start_page":     0,
     "end_page":       99,
     "lang":           "en",
-    "backend":        "vlm-vllm-async-engine",
+    "backend":        "vlm-auto-engine",
     "formula_enable": true,
     "table_enable":   true,
     "return":         "tarball_b64",
@@ -27,13 +27,13 @@ Send a POST to `/v2/{endpoint_id}/runsync` (or `/run` for async) with an `input`
 
 ### Required (exactly one of)
 
-The worker accepts a PDF from one of three transports. **Provide exactly one; providing zero or two raises a validation error.**
+The worker accepts any of these formats — PDF, image (PNG/JPEG/GIF/BMP/TIFF/WebP), DOCX, PPTX, XLSX — auto-detected from the input bytes. **Provide exactly one transport; providing zero or two raises a validation error.**
 
 | Field | Type | Notes |
 |---|---|---|
-| `pdf_url` | string | Public or presigned HTTP/HTTPS URL the worker can `GET` |
-| `pdf_b64` | string | Base64-encoded PDF bytes. RunPod's gateway caps payloads at 10 MB on `/run` and 20 MB on `/runsync`; for bigger files use `pdf_url` or `volume_path` |
-| `volume_path` | string | Absolute path to a PDF inside the container. Useful for files mounted via a RunPod network volume or baked into the image |
+| `file_url` | string | Public or presigned HTTP/HTTPS URL the worker can `GET` |
+| `file_b64` | string | Base64-encoded file bytes. RunPod's gateway caps payloads at 10 MB on `/run` and 20 MB on `/runsync`; for bigger files use `file_url` or `volume_path` |
+| `volume_path` | string | Absolute path to a file inside the container. Useful for files mounted via a RunPod network volume or baked into the image |
 
 ### Optional
 
@@ -41,8 +41,9 @@ The worker accepts a PDF from one of three transports. **Provide exactly one; pr
 |---|---|---|---|
 | `start_page` | int | `0` | 0-based, inclusive |
 | `end_page` | int | `-1` | 0-based, inclusive. `-1` or omitted means "to end of document" |
-| `lang` | string | `"en"` | Language hint passed to MinerU. 84 languages supported |
-| `backend` | string | `"vlm-vllm-async-engine"` | MinerU backend. Use `"pipeline"` for very long docs (1,000+ pages); see [Choosing a GPU](/runpod-mineru/guides/choosing-gpu/#switching-to-the-pipeline-backend) |
+| `lang` | string | `"en"` | Language hint, **pipeline backend only** (VLM backends ignore it). Use script-family codes — `east_slavic`, `cyrillic`, `latin`, `arabic`, `devanagari`, `japan`, `korean`, `chinese_cht`, `el`, `th`, etc. 109 languages supported. NOT ISO codes |
+| `backend` | string | `"vlm-auto-engine"` | One of `pipeline` \| `vlm-auto-engine` \| `vlm-http-client` \| `hybrid-auto-engine` \| `hybrid-http-client`. See [Choosing a GPU → Picking a backend](/runpod-mineru/guides/choosing-gpu/#picking-a-backend) |
+| `server_url` | string | `null` | Required for `*-http-client` backends. URL of an external vLLM OpenAI-compatible server (e.g. `https://your-host/v1`) |
 | `formula_enable` | bool | `true` | Extract LaTeX equations |
 | `table_enable` | bool | `true` | Extract structured HTML tables |
 | `return` | string | `"tarball_b64"` | Either `"tarball_b64"` (gzipped tarball of the output dir) or `"inline"` (markdown + content_list + middle + images embedded in the response) |
@@ -55,7 +56,7 @@ The worker accepts a PDF from one of three transports. **Provide exactly one; pr
   "ok": true,
   "elapsed_seconds": 18.4,
   "pages_processed": 100,
-  "mineru_version": "2.5.x",
+  "mineru_version": "3.1.x",
   "source": "url:https://example.com/report.pdf",
   "tarball_b64": "<base64-encoded gzipped tarball>"
 }
@@ -66,10 +67,11 @@ The worker accepts a PDF from one of three transports. **Provide exactly one; pr
 | `ok` | bool | Always `true` on success |
 | `elapsed_seconds` | float | Wall time inside the handler. Does not include cold-start time or transport |
 | `pages_processed` | int | Number of pages parsed. `-1` if `end_page` was open-ended |
-| `mineru_version` | string | The MinerU version that produced the parse (e.g. `2.5.0`) |
+| `mineru_version` | string | The MinerU version that produced the parse (e.g. `3.1.15`) |
 | `source` | string | Echo of the input transport: `url:...`, `b64`, or `volume:/path/...` |
 | `tarball_b64` | string | Present when `return: "tarball_b64"` (default). Base64-encoded `.tar.gz` of the output directory |
 | `markdown`, `content_list`, `middle`, `images` | various | Present when `return: "inline"`. See below |
+| `debug` | object | Observability data: `backend` used, `model_dir` (which snapshot loaded), `gpu` info, `phase_ms` timings. See below |
 
 ### When `return: "inline"`
 
@@ -82,16 +84,49 @@ Instead of `tarball_b64`, the success response contains four inline fields:
 | `middle` | object | MinerU's intermediate representation with layout, bounding boxes, reading order |
 | `images` | object | `{filename: base64-encoded-png-bytes}` for every extracted image |
 
+### Debug observability
+
+Every response includes a `debug` block with information that lets you correlate a parse to its environment without having to read worker logs:
+
+```json
+{
+  "debug": {
+    "backend": "vlm-auto-engine",
+    "model_dir": "/runpod-volume/huggingface-cache/hub/models--opendatalab--MinerU2.5-Pro-2604-1.2B/snapshots/<hash>",
+    "gpu": {
+      "available": true,
+      "name": "NVIDIA RTX 4090",
+      "compute_capability": "8.9",
+      "total_memory_gb": 23.99
+    },
+    "phase_ms": {
+      "fetch_pdf": 12,
+      "mineru_parse": 18420,
+      "package": 95
+    }
+  }
+}
+```
+
+| Field | Notes |
+|---|---|
+| `backend` | The backend that ran. Echoes the input or the default |
+| `model_dir` | Filesystem path of the model snapshot that loaded. Useful for verifying that a Cached Models endpoint is hitting the right snapshot (`null` if HF_HOME is empty) |
+| `gpu` | Card name, `compute_capability` (8.6 = Ampere, 8.9 = Ada, 9.0 = Hopper, 12.0 = Blackwell), VRAM. Helps debug "why did my job land on a different card than my pool config?" |
+| `phase_ms` | Per-phase timings: `fetch_pdf` (download/decode), `mineru_parse` (MinerU's `aio_do_parse`), `package` (tarball or inline assembly) |
+
+On failure, `debug` still contains `gpu`, `model_dir`, and whatever `phase_ms` was collected before the error.
+
 ## Failure response
 
 When the handler raises or returns an error, the response sets `ok: false` and includes a top-level `error` key. RunPod marks the job FAILED in the dashboard based on the presence of that key.
 
 ```json
 {
-  "error": "ValueError: must provide exactly one of pdf_url / pdf_b64 / volume_path",
+  "error": "ValueError: must provide exactly one of file_url / file_b64 / volume_path",
   "ok": false,
   "elapsed_seconds": 0.1,
-  "mineru_version": "2.5.x",
+  "mineru_version": "3.1.x",
   "traceback": "Traceback (most recent call last):\n  File ..."
 }
 ```
@@ -121,9 +156,10 @@ Consume them via the RunPod SDK's `endpoint.stream(job_id)` or the HTTP `GET /v2
 The handler validates input before doing any work:
 
 1. **Field types and bounds** via `runpod.serverless.utils.rp_validator`. Wrong type, missing required field, or out-of-range value raises `ValueError`.
-2. **XOR transport rule.** Exactly one of `pdf_url`, `pdf_b64`, `volume_path` must be set. Zero or two raises `ValueError`.
+2. **XOR transport rule.** Exactly one of `file_url`, `file_b64`, `volume_path` must be set. Zero or two raises `ValueError`.
 3. **Basename safety.** `basename` must match `[a-zA-Z0-9_-]+`; otherwise `ValueError`.
-4. **Inline PDF size.** `pdf_b64` decoded length must be ≤ 20 MB (matching RunPod's `/runsync` gateway cap).
+4. **Inline file size.** `file_b64` decoded length must be ≤ 20 MB (matching RunPod's `/runsync` gateway cap).
+5. **Format detection.** The first few bytes must match a known signature (PDF / image / OOXML); otherwise `ValueError`.
 
 All validation errors produce a failure response with `error: "ValueError: ..."` and the job is marked FAILED.
 

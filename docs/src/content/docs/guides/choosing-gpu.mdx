@@ -3,14 +3,14 @@ title: Choosing a GPU
 description: When 24 GB is enough, when you need 48 GB, and when to switch backends. With concrete RunPod GPU pool IDs for each workload shape.
 ---
 
-The repo's default GPU pool is `AMPERE_24` (24 GB Ampere — RTX 3090 / A5000 class). That's the right choice for most users, and the MinerU 2.5 1.2B VLM was specifically sized to fit comfortably in 24 GB with KV cache headroom. This page is for the cases when it isn't.
+The repo's default GPU pool is `AMPERE_24` (24 GB Ampere — RTX 3090 / A5000 class). That's the right choice for most users — the `MinerU2.5-Pro-2604-1.2B` VLM (running on the MinerU 3.1.x runtime) was specifically sized to fit comfortably in 24 GB with KV cache headroom. This page is for the cases when it isn't.
 
 ## TL;DR
 
 | You are… | Use GPU pool | Why |
 |---|---|---|
 | Parsing small-to-medium docs (≤100 pages) one at a time | `AMPERE_24` or `ADA_24` | Default. 24 GB fits the model + sequential page KV cache with headroom. |
-| Doing concurrent batching inside a single worker | `AMPERE_48` or `ADA_48_PRO` | vLLM async engine can grow KV cache beyond 24 GB under batch pressure. |
+| Doing concurrent batching inside a single worker | `AMPERE_48` | vLLM async engine can grow KV cache beyond 24 GB under batch pressure. |
 | Parsing large books (100–1,000 pages) | `AMPERE_48` | Headroom for dense layout / long reading-order context. |
 | Parsing huge documents (1,000+ pages) | `AMPERE_48` + `--backend pipeline` | Switch off vLLM KV-cache mode; pipeline backend processes page-by-page at ~6 GB. |
 
@@ -18,22 +18,33 @@ If you're unsure, **start with the default `AMPERE_24` and watch for OOM in the 
 
 ## How much VRAM MinerU actually uses
 
-These numbers are approximate — pulled from MinerU's documented minimums plus community measurements on representative workloads. They give you a starting mental model, not a guarantee.
+Measured on an RTX A5000 (24 GB) parsing a single-page test PDF with the default `vlm-auto-engine` backend:
 
-| Layer | VRAM |
+| Component | VRAM |
 |---|---|
-| Model weights | ~2.2 GB |
-| Peak activations | ~1.4 GB |
-| CUDA graph cache | ~0.4 GB |
-| **Model base footprint** | **~4 GB** |
-| vLLM KV cache (single page) | ~1–2 GB |
-| vLLM KV cache (concurrent pages, async batching) | grows with batch size |
-| OS + driver overhead | ~1 GB |
-| **Single-doc sequential peak (typical)** | **~8 GB** |
-| **Single-worker, async batching (small batch)** | **~11 GB** |
-| **Single-worker, async batching (heavy batch / large docs)** | **16+ GB** |
+| Model weights | 2.16 GiB |
+| Peak activations | 0.75 GiB |
+| Non-torch memory | 0.02 GiB |
+| CUDA graph cache | 0.23 GiB |
+| **vLLM KV cache (default `gpu_memory_utilization=0.5`)** | **9.50 GiB** |
+| **Total active VRAM** | **~13 GiB / 24 GiB (≈54%)** |
 
-The model itself is small — most of the VRAM cost is **KV cache**, which scales with how many pages the vLLM async engine has in flight at once. A single document processed sequentially stays under 10 GB indefinitely, regardless of the document's total length.
+The model itself is small (~2 GB). **The dominant consumer is vLLM's KV cache**, which gets allocated upfront based on `gpu_memory_utilization` (default 0.5 → ~11.78 GiB target on a 24 GB card). The actual KV cache usage scales with how many tokens are in flight; on a single-page parse it sits around 9.5 GiB.
+
+Implications:
+
+- **24 GB GPUs are the right minimum.** A 16 GB card cannot fit the default config — vLLM would OOM during engine init.
+- **Sequential parses don't grow above ~13 GiB.** KV cache is bounded by `gpu_memory_utilization`; long documents don't push it higher.
+- **Concurrent batching grows KV cache pressure**, not other components. To bound max VRAM under heavy concurrency, either move to a 48 GB pool or tune `gpu_memory_utilization` downward.
+
+### Rough peak VRAM by workload shape (estimates)
+
+| Workload | Peak VRAM | Fits in |
+|---|---|---|
+| Single-doc sequential (default config) | ~13 GiB | 24 GB ✓ |
+| Single-worker, light async batching (≤4 concurrent pages) | ~14–18 GiB | 24 GB ✓ |
+| Single-worker, heavy batching (8+ concurrent, large docs) | 20+ GiB | 48 GB recommended |
+| Pipeline backend (`backend: "pipeline"`) — no vLLM KV cache | ~6 GiB | 24 GB easily ✓ |
 
 ## Why the MinerU paper used 48 GB
 
@@ -46,14 +57,14 @@ The published benchmarks ran on dual RTX 4090 (effectively 48 GB combined) to **
 This is the default RunPod serverless shape: each incoming job spins a worker, the worker parses the document, the worker scales to zero after `idle_timeout`. No concurrency inside the worker.
 
 - **GPU pool**: `AMPERE_24` or `ADA_24` (24 GB)
-- **VRAM peak**: ~8 GB
-- **Backend**: `vlm-vllm-async-engine` (the default)
+- **VRAM peak**: ~13 GiB
+- **Backend**: `vlm-auto-engine` (the default; resolves to vLLM async on CUDA)
 
 ### Single worker, batching multiple docs
 
 If you set `concurrencyModifier` > 1 on your endpoint so one worker handles several requests in parallel, the vLLM async engine batches their pages. KV cache grows linearly with batch size.
 
-- **GPU pool**: `ADA_24` for small batches (≤4 concurrent), `AMPERE_48` or `ADA_48_PRO` for larger
+- **GPU pool**: `ADA_24` for small batches (≤4 concurrent), `AMPERE_48` for larger
 - **VRAM peak**: 11–16 GB depending on batch size
 - **Trade-off**: higher throughput per worker; harder to bound max VRAM. Watch `nvidia-smi` in worker logs after deploy.
 
@@ -77,33 +88,85 @@ The high-throughput shape: `workers_max > 1` AND `concurrencyModifier > 1`. Each
 
 | Doc size | Pages | Recommended pool | Notes |
 |---|---|---|---|
-| Tiny | 1–3 | `AMPERE_24` | Smallest viable. L4 24 GB also fits if your endpoint targets the ADA family. |
+| Tiny | 1–3 | `AMPERE_24` | Default ~13 GiB peak (measured on RTX A5000); 16 GB pools won't fit the default vLLM config. |
 | Small | 3–30 | `AMPERE_24` | The "average document" case the defaults are tuned for. |
 | Medium | 30–100 | `ADA_24` (RTX 4090) | Faster than Ampere 24 GB for the same job; KV cache stays well under 16 GB. |
 | Large | 100–1,000 | `AMPERE_48` | More headroom for dense layouts. Sequential mode still uses ~10 GB, so 48 GB is safety margin. |
 | Huge | 1,000–10,000 | `AMPERE_48` + `--backend pipeline` | See next section. |
 
-## Switching to the pipeline backend
+## Picking a backend
 
-For very long documents (1,000+ pages), MinerU's `pipeline` backend is the right tool. It trades raw speed for memory predictability:
+MinerU 3.1.x exposes five backends; the template accepts all of them as a per-job string. You don't need to change the endpoint or the GPU pool to switch — the same worker can handle different backends on consecutive jobs.
 
-- **Pipeline backend**: page-by-page streaming, no vLLM KV cache accumulation, **~6 GB VRAM floor**, slower per-page but constant-memory.
-- **VLM backend** (default): vLLM async engine, faster per-page, KV cache grows under batch pressure.
+| Backend | What it runs | When to pick it | Per-page VRAM |
+|---|---|---|---|
+| `vlm-auto-engine` *(default)* | The `MinerU2.5-Pro-2604-1.2B` VLM via vLLM | English / Chinese, short-to-medium docs, fast wall time | ~13 GiB |
+| `pipeline` | PaddleOCR + dedicated layout/formula/table models | Non-Latin scripts (use a script-family `lang` code), very long docs, constant-memory workloads | **~6 GiB floor** |
+| `hybrid-auto-engine` | Pipeline + VLM, auto-routed per page | Mixed-content docs where the pipeline+VLM combination outperforms either alone | Highest |
+| `vlm-http-client` | Same VLM via an external vLLM OpenAI-compatible server | Split-tier deploys — keep a 24 GB worker cheap, run vLLM on a separate always-on box | Low (no model on worker) |
+| `hybrid-http-client` | Hybrid with external VLM server | Same split-tier idea, on hybrid workloads | Low |
 
-Switch by passing `backend: "pipeline"` in the job input:
+### Pipeline: the constant-memory escape hatch
+
+Pipeline trades raw speed for memory predictability: page-by-page streaming with no vLLM KV-cache accumulation, **~6 GiB VRAM floor**. Slower per page (~3–5 s vs ~0.5 s for the VLM) but constant-memory regardless of document length. Required for non-Latin scripts because the VLM ignores `lang` and falls back to Latin transliteration on Cyrillic / Arabic / Devanagari / etc.
 
 ```json
 {
   "input": {
-    "pdf_url": "https://example.com/full-book.pdf",
+    "file_url": "https://example.com/russian-report.pdf",
     "backend": "pipeline",
-    "start_page": 0,
-    "end_page": 4999
+    "lang": "east_slavic"
   }
 }
 ```
 
-You don't need to change the endpoint or the GPU pool for this — it's per-job. The same worker can handle small docs with the VLM backend and large docs with the pipeline backend.
+Script-family `lang` codes (not ISO): `east_slavic` (Russian/Ukrainian/Belarusian), `cyrillic` (Serbian/Bulgarian/Mongolian), `latin`, `arabic`, `devanagari`, `japan`, `korean`, `chinese_cht`, `el` (Greek), `th`, etc. See MinerU's [language support docs](https://github.com/opendatalab/MinerU#supported-languages) for the full list of 109.
+
+### Hybrid: best quality, biggest GPU
+
+`hybrid-auto-engine` routes each page through either pipeline or VLM depending on content. Best overall quality but highest VRAM footprint — needs 48 GB on dense mixed-content docs.
+
+### HTTP-client backends: split worker from model
+
+`vlm-http-client` and `hybrid-http-client` don't load the VLM into the worker. Instead they POST to an external vLLM OpenAI-compatible server (pass `server_url` in the job input). Useful when you want to:
+
+- Keep a fleet of small (24 GB or less) workers cheap and stateless
+- Run one always-on vLLM server amortising the model load across all of them
+- Run vLLM on hardware the serverless tier doesn't offer (multi-GPU, NVLink, etc.)
+
+```json
+{
+  "input": {
+    "file_url": "...",
+    "backend": "vlm-http-client",
+    "server_url": "https://your-vllm-host.example.com/v1"
+  }
+}
+```
+
+### Official hardware compatibility (MinerU upstream)
+
+Mirrored from MinerU's [official PyPI page](https://pypi.org/project/mineru/) so you don't have to context-switch. These are MinerU's project-wide minimums; our worker's defaults are usually well above them.
+
+|  | `pipeline` | `vlm-auto-engine` | `hybrid-auto-engine` | `*-http-client` |
+|---|---|---|---|---|
+| Backend features | Good compatibility | High HW requirements | High HW requirements | For OpenAI-compatible servers² |
+| Accuracy¹ | 85+ | 95+ | 95+ | (delegated to remote server) |
+| OS support | Linux³ / Windows⁴ / macOS⁵ | Linux³ / Windows⁴ / macOS⁵ | Linux³ / Windows⁴ / macOS⁵ | Linux³ / Windows⁴ / macOS⁵ |
+| Pure CPU support | ✅ | ❌ | ❌ | ✅ |
+| GPU acceleration | Volta or newer GPUs / Apple Silicon | Volta or newer | Volta or newer | Not required |
+| Min VRAM | 4 GB | 8 GB | 8 GB | 2 GB |
+| RAM | 16 GB min, 32 GB recommended | 16 GB min, 32 GB recommended | 16 GB min, 32 GB recommended | 16 GB min |
+| Disk | 20 GB min, SSD recommended | 20 GB min, SSD recommended | 20 GB min, SSD recommended | 2 GB min |
+| Python | 3.10 – 3.13 | 3.10 – 3.13 | 3.10 – 3.13 | 3.10 – 3.13 |
+
+<sub>¹ End-to-End Evaluation Overall score on [OmniDocBench v1.6](https://github.com/opendatalab/OmniDocBench).</sub><br/>
+<sub>² OpenAI-compatible servers: vLLM, SGLang, LMDeploy.</sub><br/>
+<sub>³ Linux distributions from 2019 or later.</sub><br/>
+<sub>⁴ Windows is limited to Python 3.10–3.12 because the `ray` dependency does not support Python 3.13 on Windows.</sub><br/>
+<sub>⁵ macOS requires 14.0 or later.</sub>
+
+Our **default RunPod config** uses more VRAM than these floors because vLLM's `gpu_memory_utilization=0.5` allocates ~9.5 GiB of KV cache upfront on 24 GB cards. Tuning it down would let `vlm-auto-engine` run on smaller GPUs, at the cost of concurrent throughput. Our container image runs Linux + Python 3.11; OS rows above are MinerU's claim, not what we ship.
 
 ## How to configure GPU pool
 
@@ -132,13 +195,23 @@ For published Hub templates, the `gpuIds` field declares the default pool list u
 ```json
 {
   "config": {
-    "gpuIds": "AMPERE_24,ADA_24,AMPERE_48,ADA_48_PRO",
+    "gpuIds": "AMPERE_24,ADA_24,AMPERE_48",
     ...
   }
 }
 ```
 
 This repo's default exposes both 24 GB and 48 GB tiers so users can opt up without re-publishing.
+
+## A note on `ADA_48_PRO` and Blackwell
+
+The `ADA_48_PRO` pool was originally the RTX 6000 Ada Generation (compute capability 8.9). RunPod has been adding the newer RTX PRO 6000 Blackwell cards (compute capability 12.0) to the same pool, and the names are nearly identical — NVIDIA labels both as "RTX 6000" family cards. The bundled xformers / flash-attn in the current worker image has dedicated kernels for Ampere (8.0-8.6), Ada (8.9), and Hopper (9.0), but no Blackwell (12.0) code path yet. When run on a Blackwell card, xformers misroutes to the Hopper kernel and crashes during VLM model init:
+
+```
+CUDA error (...flash-attention/hopper/flash_fwd_launch_template.h:188): invalid argument
+```
+
+That's why the template's default `gpuIds` list excludes `ADA_48_PRO`. If you need a 48 GB Ada-or-newer card and are happy to use only the `pipeline` backend (which doesn't touch xformers / flash-attn), you can add it back to your endpoint's pool list manually — but the VLM backend will fail on the Blackwell variant until the worker image bumps xformers / vllm to versions that ship a Blackwell kernel.
 
 ## Cost implications
 
