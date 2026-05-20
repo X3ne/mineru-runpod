@@ -128,7 +128,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default=DEFAULTS["gpu_ids"],
         help=(
             f"RunPod GPU pool (default: {DEFAULTS['gpu_ids']}). "
-            f"common options: AMPERE_16, AMPERE_24, AMPERE_48, AMPERE_80, ADA_24, ADA_48_PRO, ADA_80_PRO."
+            f"common options: AMPERE_24, ADA_24, AMPERE_48, AMPERE_80, ADA_80_PRO. "
+            f"avoid ADA_48_PRO until xformers ships a Blackwell kernel."
         ),
     )
     hw.add_argument(
@@ -137,7 +138,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default=DEFAULTS["container_disk_gb"],
         help=(
             f"per-worker container disk (default: {DEFAULTS['container_disk_gb']} GB). "
-            f"MinerU 2.5 needs ~3 GB for the model weights + temp files."
+            f"Model weights live on RunPod's Cached Models volume, not the container disk; "
+            f"this is just for code + tempfiles during a parse."
         ),
     )
 
