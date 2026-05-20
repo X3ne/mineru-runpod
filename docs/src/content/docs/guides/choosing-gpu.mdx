@@ -108,7 +108,7 @@ MinerU 3.1.x exposes five backends; the template accepts all of them as a per-jo
 
 ### Pipeline: the constant-memory escape hatch
 
-Pipeline trades raw speed for memory predictability: page-by-page streaming with no vLLM KV-cache accumulation, **4 GB minimum** per MinerU's hardware compatibility table. Slower per page (~3–5 s vs ~0.5 s for the VLM, our measurements) but constant-memory regardless of document length. The pipeline backend uses PaddleOCR with explicit script-family models (109 languages per MinerU's README) and is the documented-safe choice for non-Latin scripts; empirically the Pro VLM also handles Cyrillic (Russian) correctly even though `lang` is ignored, but coverage of other non-Latin scripts on the VLM is undocumented.
+Pipeline trades raw speed for memory predictability: page-by-page streaming with no vLLM KV-cache accumulation, **4 GB minimum** per MinerU's hardware compatibility table. Per-page time is **~3–5 s across GPUs** for pipeline. The VLM backend is much more GPU-sensitive: MinerU upstream claims **~0.5 s/page (2.12 fps) on an A100**; we measured **~3.5 s/page on an A5000 24 GB** under our default config. So VLM-on-A100 ≈ 7× faster than pipeline; VLM-on-A5000 ≈ same speed as pipeline. The pipeline backend uses PaddleOCR with explicit script-family models (109 languages per MinerU's README) and is the documented-safe choice for non-Latin scripts; empirically the Pro VLM also handles Cyrillic (Russian) correctly even though `lang` is ignored, but coverage of other non-Latin scripts on the VLM is undocumented.
 
 ```json
 {

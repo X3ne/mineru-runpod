@@ -36,7 +36,9 @@ curl -X POST "https://api.runpod.ai/v2/<endpoint-id>/runsync" \
   -d '{"input":{"file_url":"https://example.com/report.pdf","end_page":4,"return":"inline"}}'
 ```
 
-Accepts PDF, image (PNG/JPEG/GIF/BMP/TIFF/WebP), DOCX, PPTX, XLSX. Three return modes: `tarball_b64` (default), `inline`, or `s3` (presigned URL for outputs that would exceed RunPod's ~20 MB response cap — requires `BUCKET_*` env vars on the endpoint).
+The response includes a top-level `markdown` field with the full Markdown rendering of the document. Pipe it straight to a file: `curl ... | jq -r '.output.markdown' > report.md`.
+
+Accepts PDF, image (PNG/JPEG/GIF/BMP/TIFF/WebP), DOCX, PPTX, XLSX. Three return modes: `tarball_b64` (default — base64 tarball containing `{basename}.md` + structured JSON + images), `inline` (markdown + content_list + middle + images returned as separate response fields), or `s3` (presigned URL for outputs that would exceed RunPod's ~20 MB response cap — requires `BUCKET_*` env vars on the endpoint).
 
 ## Why this exists
 

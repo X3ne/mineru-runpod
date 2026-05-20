@@ -37,7 +37,7 @@ What to look at:
 | `model_dir` | Filesystem path of the snapshot that actually loaded. Both VLM and pipeline models are baked into the image at `/root/.cache/huggingface/`; if this is `null` on a successful job, the image build skipped the model bake step (unusual — file a bug) |
 | `gpu.compute_capability` | 8.6 = Ampere (3090, A5000, A6000), 8.9 = Ada (4090, RTX 6000 Ada), 9.0 = Hopper (H100), 12.0 = **Blackwell — VLM will crash** |
 | `phase_ms.fetch_input` | If hundreds of seconds on a `file_url` job, the source URL is slow / failing |
-| `phase_ms.mineru_parse` | Per-page guidance for warm workers: ~0.5 s for VLM, ~3–5 s for pipeline. **First call on a fresh worker is much higher** (model load + vLLM warmup adds ~60–120s for the VLM backend specifically). If a warm-worker call is 10× the expected per-page number, you're memory-bound and vLLM is swapping |
+| `phase_ms.mineru_parse` | Per-page guidance for warm workers, **highly GPU-dependent**: MinerU upstream cites **~0.5 s/page (2.12 fps) on an A100** for the VLM backend; we measured **~3.5 s/page on an A5000 24 GB** under the default `gpu_memory_utilization=0.5`. Pipeline backend is ~3–5 s/page across GPUs (CPU-bound for layout, GPU-bound only for OCR). **First call on a fresh worker is much higher** (model load + vLLM warmup adds ~90–130 s for the VLM backend). If a warm-worker call is 5× the expected per-page number for your GPU, you're memory-bound and vLLM is swapping |
 
 The worker also prints two lines to stdout — visible in RunPod's worker logs:
 
@@ -68,9 +68,9 @@ The worker keeps running the previous image; the new one never propagates.
 
 To re-enable testing later, rename back to `.runpod/tests.json` and consider switching `gpuTypeId` from `"NVIDIA RTX A5000"` to `"NVIDIA GeForce RTX 4090"` — 4090 has the highest pool availability across RunPod's regions.
 
-## VLM backend may crash on Blackwell GPUs (unverified on current image)
+## VLM backend crashes on Blackwell GPUs (cc=12.0)
 
-**Symptom (originally observed)**: worker logs show successful model load followed by:
+**Symptom**: worker logs show successful model load followed by:
 
 ```
 compute_capability: 12.0 >= 8.0
@@ -79,13 +79,13 @@ INFO Model loading took 2.16 GiB and 0.36 seconds
 CUDA error (...flash-attention/hopper/flash_fwd_launch_template.h:188): invalid argument
 ```
 
-`debug.gpu.compute_capability` in the response is `12.0`.
+`debug.gpu.compute_capability` in the response is `12.0` (e.g. `NVIDIA RTX PRO 6000 Blackwell Server Edition MIG 1g.24gb`).
 
-**Cause (as of the previous image)**: xformers/flash-attn in `vllm/vllm-openai:v0.6.6` shipped dedicated kernels for Ampere (8.x), Ada (8.9), and Hopper (9.0), but no Blackwell (12.0) code path. On a Blackwell card xformers misrouted to the Hopper kernel and crashed.
+**Cause**: xformers / flash-attention in vllm 0.11.2 (our base image) ships kernels for Ampere (8.x), Ada (8.9), and Hopper (9.0) — no Blackwell-SM120 code path. On Blackwell, xformers misroutes to the Hopper kernel and crashes during VLM model init.
 
-**Status on current image**: the template now uses `vllm/vllm-openai:v0.11.2`. **We have not retested on Blackwell since the bump** — vllm/xformers may or may not have added Blackwell support in the intervening 5 minor versions. The default `gpuIds: "AMPERE_24,ADA_24,AMPERE_48"` excludes Blackwell entirely so most users are unaffected.
+**Why we can't just bump vllm**: MinerU 3.1.x's pyproject pins `vllm>=0.10.1.1,<0.12`. The first vllm version with explicit Blackwell support is `v0.20.0` ("sm_120 / Jetson Thor added to CUDA 13.0 build targets"), with broader Blackwell coverage in `v0.21.0`. Both are outside MinerU's vllm-version constraint. Until MinerU loosens that pin, the VLM backend cannot run on Blackwell SM120 cards. The original v0.6.6 → v0.11.2 bump did not change this because v0.11.2 also predates Blackwell support.
 
-**Fix**: keep the default `gpuIds` list as-is. If you've manually opted into `ADA_48_PRO`, that pool can mix in Blackwell SKUs — remove it from your endpoint's GPU pool list. For workloads needing a 48 GB Ada card, the `pipeline` backend doesn't use xformers/flash-attn and is unaffected by the crash regardless of vllm version. See [Choosing a GPU](/runpod-mineru/guides/choosing-gpu/#a-note-on-ada_48_pro-and-blackwell) for the full background.
+**Fix**: keep the default `gpuIds: "AMPERE_24,ADA_24,AMPERE_48"` — all unambiguously pre-Blackwell. If you've manually opted into `ADA_48_PRO`, that pool can mix in Blackwell SKUs since RunPod groups them under the same pool name — remove it from your endpoint's GPU pool list. For workloads that need a 48 GB Ada-or-newer card, the `pipeline` backend doesn't use xformers/flash-attn and is unaffected, so it runs on Blackwell fine; only the VLM/hybrid backends crash. See [Choosing a GPU](/runpod-mineru/guides/choosing-gpu/#a-note-on-ada_48_pro-and-blackwell) for the GPU-pool background.
 
 ## "Pod scaled to zero" but the next job has a noticeable cold start
 
@@ -97,7 +97,9 @@ CUDA error (...flash-attention/hopper/flash_fwd_launch_template.h:188): invalid 
 
 | Scenario | First-job latency |
 |---|---|
-| Warm worker (within `idle_timeout` window) | ~0.5 s/page for VLM, ~3–5 s/page for pipeline |
+| Warm worker, VLM, on A100 (per MinerU upstream) | ~0.5 s/page (2.12 fps) |
+| Warm worker, VLM, on A5000 24 GB (our measurement) | ~3.5 s/page |
+| Warm worker, pipeline (any GPU ≥ 4 GB) | ~3–5 s/page |
 | FlashBoot snapshot restore | ~30–60 s for the first job (RunPod's documented FlashBoot benefit) |
 | Cold worker, no FlashBoot, first VLM call | ~90–130 s for the first job (model load + vLLM warmup) |
 | Cold worker, no FlashBoot, first pipeline call | ~10–15 s for the first job (lighter; no vLLM warmup) |
@@ -145,7 +147,7 @@ Most common reasons:
 **Fix**:
 - **Client-side**: pass a larger `timeout` to `parse_document(timeout=3600, ...)`
 - **Endpoint-side**: bump `--execution-timeout` in `deploy.py` (defaults to 900 s). Use `--execution-timeout 3600` for full books.
-- **Per-page math (warm worker)**: VLM ≈ 0.5 s/page, pipeline ≈ 3–5 s/page. A 1000-page book on pipeline = ~3000–5000 s. **Add 90–130 s for the first call on a cold worker if VLM** (model load + vLLM warmup) — the cold-start tax is paid once per worker, not per page.
+- **Per-page math (warm worker, GPU-dependent)**: MinerU upstream cites ~0.5 s/page for the VLM backend on an A100. We measured ~3.5 s/page on an A5000 24 GB. Pipeline ≈ 3–5 s/page across GPUs. A 1000-page book on pipeline = ~3000–5000 s; on VLM-on-A5000 ≈ ~3500 s; on VLM-on-A100 ≈ ~500 s. **Add 90–130 s for the first call on a cold worker if VLM** (model load + vLLM warmup) — the cold-start tax is paid once per worker, not per page.
 
 ## Getting more help
 

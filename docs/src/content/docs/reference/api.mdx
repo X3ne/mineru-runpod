@@ -49,6 +49,33 @@ The worker accepts any of these formats — PDF, image (PNG/JPEG/GIF/BMP/TIFF/We
 | `return` | string | `"tarball_b64"` | `"tarball_b64"` (default, base64-encoded .tar.gz), `"inline"` (markdown + content_list + middle + images embedded in the response), or `"s3"` (upload to a configured S3-compatible bucket and return a presigned URL — requires `BUCKET_*` env vars). See [Output modes](/runpod-mineru/guides/output-modes/) for the trade-offs. |
 | `basename` | string | `"doc"` | Filename stem for output files. Must be alphanumeric with `-` or `_` |
 
+## I just want the Markdown — how do I get it?
+
+Set `"return": "inline"` in the job input. The response then contains a top-level `"markdown"` field with the full document rendered as Markdown:
+
+```json
+{
+  "input": {
+    "file_url": "https://example.com/report.pdf",
+    "return": "inline"
+  }
+}
+```
+
+Response (truncated):
+
+```json
+{
+  "ok": true,
+  "markdown": "# Document title\n\nFirst paragraph...\n\n## Section\n\nA table:\n\n<table>...</table>\n",
+  "content_list": [...],
+  "middle": {...},
+  "images": {"img-0.png": "<base64>"}
+}
+```
+
+`tarball_b64` (the default) also includes a `.md` file inside the gzipped tarball at `{basename}.md` — extract the tarball and the markdown is there too. Use `inline` when you want to read the markdown directly without unpacking; use `tarball_b64` (or `s3`) when you also want the structured JSON / image files together.
+
 ## Success response
 
 ```json

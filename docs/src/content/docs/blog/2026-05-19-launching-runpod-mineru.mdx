@@ -26,7 +26,7 @@ Here's the [open-source repo I shipped](https://github.com/sergeyshmakov/runpod-
 |---|---:|---:|
 | OCR APIs (typical) | $0.001 – $0.01 | depends |
 | Self-hosted GPU pod (always-on 24h on community-cloud A5000) | $0.001 – $0.003 | fast |
-| **MinerU on RunPod serverless (this)** | **~$0.0003** | **~0.5 s** |
+| **MinerU on RunPod serverless (this)** | **~$0.0003** | **~0.5 s on A100 / ~3.5 s on A5000** |
 | Marker / Nougat on CPU | $0 cash, $$$ time | ~30 s |
 
 The trick is **scale-to-zero**. RunPod bills per-second; when no one's calling, you owe nothing. When traffic arrives, FlashBoot spins a worker in 10–20 s and serves until 10 s of idle, then disappears.
@@ -97,7 +97,7 @@ client.save_tarball(result, "./out/doc")
 # → ./out/doc/images/*.png
 ```
 
-That's it. First job takes ~30–60 s because the worker is cold and downloads the MinerU 2.5 model (~2.5 GB). Subsequent jobs in the same warm window run at ~2 pages/sec (VLM backend, ~0.5 s per page). After 10 s of idle, the worker scales to zero and you stop paying.
+That's it. First job takes ~30–60 s because the worker is cold and downloads the MinerU 2.5 model (~2.5 GB). Subsequent jobs in the same warm window run at MinerU-claimed ~2 pages/sec on an A100 (~0.5 s/page) — we measured ~0.3 pages/sec (~3.5 s/page) on the cheaper A5000 24 GB which is the template's default GPU. Pipeline backend runs ~3–5 s/page across all GPUs. After 10 s of idle, the worker scales to zero and you stop paying.
 
 ## What's in the JSON
 
