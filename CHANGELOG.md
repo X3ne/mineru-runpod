@@ -1,3 +1,15 @@
+## [1.1.13](https://github.com/sergeyshmakov/runpod-mineru/compare/v1.1.12...v1.1.13) (2026-05-20)
+
+### Bug Fixes
+
+* **docs:** audit troubleshooting + language claims against empirical evidence ([cc6f064](https://github.com/sergeyshmakov/runpod-mineru/commit/cc6f0645796953525cc84c343f375c030180b2a6))
+* **docs:** correct per-page speed claims and Blackwell wording per empirical + upstream evidence ([e555a7a](https://github.com/sergeyshmakov/runpod-mineru/commit/e555a7a49844e144c5e03cea75b424494b4e6358))
+* **hub:** bump container disk 30 -> 50 GB to accommodate baked-in models ([f8872aa](https://github.com/sergeyshmakov/runpod-mineru/commit/f8872aa4f35c68168c5dedd6dff8d14e76e77adc))
+
+### Documentation
+
+* add 'Supported GPU pools' reference table to choosing-gpu ([72b8407](https://github.com/sergeyshmakov/runpod-mineru/commit/72b84072f5af2de86199ebcb4fddbb90a37ea4ec))
+
 ## [1.1.12](https://github.com/sergeyshmakov/runpod-mineru/compare/v1.1.11...v1.1.12) (2026-05-20)
 
 ### Bug Fixes
