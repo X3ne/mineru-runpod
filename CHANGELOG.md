@@ -1,3 +1,9 @@
+## [1.1.21](https://github.com/sergeyshmakov/mineru-runpod/compare/v1.1.20...v1.1.21) (2026-05-24)
+
+### Bug Fixes
+
+* make file symlink ([a390ad5](https://github.com/sergeyshmakov/mineru-runpod/commit/a390ad512aadd552fdea0b7f6d7adb9d05ef5a19))
+
 ## [1.1.20](https://github.com/sergeyshmakov/mineru-runpod/compare/v1.1.19...v1.1.20) (2026-05-24)
 
 ### Bug Fixes
