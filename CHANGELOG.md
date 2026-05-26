@@ -1,3 +1,16 @@
+## [1.4.0](https://github.com/sergeyshmakov/mineru-runpod/compare/v1.3.1...v1.4.0) (2026-05-26)
+
+### Features
+
+* add otel ([cf45542](https://github.com/sergeyshmakov/mineru-runpod/commit/cf45542737f791a572556a537e456afa76e3e9c7))
+
+### Documentation
+
+* add blog post about flash boot ([b214a38](https://github.com/sergeyshmakov/mineru-runpod/commit/b214a384a2c9f9a7aea09c124c2be592954ddc6d))
+* align articles with latest info ([b8d2b60](https://github.com/sergeyshmakov/mineru-runpod/commit/b8d2b60151e616d1969ff1678acea6c60c445240))
+* tune subheader text ([662aa74](https://github.com/sergeyshmakov/mineru-runpod/commit/662aa74ee5bebca71cf84ba3ebb72877ee203e9d))
+* update docs about flash boot ([93fe53f](https://github.com/sergeyshmakov/mineru-runpod/commit/93fe53f96e6397ee60727a0cc738c924eea73028))
+
 ## [1.3.1](https://github.com/sergeyshmakov/mineru-runpod/compare/v1.3.0...v1.3.1) (2026-05-26)
 
 ### Bug Fixes
