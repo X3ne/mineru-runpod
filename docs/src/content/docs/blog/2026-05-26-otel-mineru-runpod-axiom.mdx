@@ -34,42 +34,49 @@ I have no affiliation with Axiom. They're the backend I picked for my own deploy
 
 ## How do I create Axiom datasets for OpenTelemetry?
 
-Create two datasets in the Axiom UI: one for events (traces + logs) and one for metrics. Axiom routes the three signal types into different storage formats, and metrics in particular need their own dataset to show up in the metrics view. Naming convention I use: `mineru-events` and `mineru-metrics`.
+Create two datasets in the Axiom UI: one **Events** dataset (holds both traces and logs) and one **Metrics** dataset. Those are the only two dataset types Axiom exposes in the UI; metrics are kept separate because they use a different storage format under the hood.
 
 1. Sign in to Axiom and go to **Datasets** → **New dataset**.
-2. Name the first one `mineru-events`. This will hold traces and logs.
-3. Create a second dataset called `mineru-metrics`. This one is metrics-only.
-
-You can technically point all three signals at one dataset, but Axiom's metrics view requires the metrics-dataset storage format. Splitting them is the path of least resistance.
+2. Create `mineru-events` with **Events** type. This holds traces and logs together.
+3. Create `mineru-metrics` with **Metrics** type.
 
 Names are arbitrary — substitute whatever fits your naming convention. I prefix everything with the service name so multiple endpoints (staging, prod, experiments) don't collide in queries.
 
 ## How do I generate an Axiom API token for OTLP ingest?
 
-In the Axiom UI, go to **Settings → API tokens → Generate new token**. Give it ingest scope on both datasets created in the previous step. Copy the resulting `xat-` prefixed string and paste it into your RunPod endpoint config in the next section. Tokens are scoped per-dataset, so re-generate later if you add more datasets to the same workspace.
+In the Axiom UI, go to **Settings → API tokens → Generate new token**. Use an **Advanced API token** (prefix `xaat-`) and explicitly grant the **Ingest** scope on **both** datasets you just created. Forgetting the scope on the metrics dataset is one of the common failure modes — it surfaces as `403 Forbidden` in the worker logs while events ingest works fine. Copy the resulting `xaat-` prefixed string and paste it into your RunPod endpoint config in the next section.
 
-The token format starts with `xat-` followed by a long random string. Treat it like any production secret: paste it only into RunPod's **Environment Variables** UI (which encrypts at rest), never check it into git, and rotate when employees with access leave.
+Treat the token like any production secret: paste it only into RunPod's **Environment Variables** UI (which encrypts at rest), never check it into git, and rotate when employees with access leave.
 
 If your Axiom workspace is in the EU region, your token works against `https://api.eu.axiom.co` instead of the US default. Same format, different base URL — keep track of which region the token belongs to.
 
 ## What environment variables ship RunPod worker telemetry to Axiom?
 
-Set four environment variables on your RunPod endpoint: `OTEL_EXPORTER_OTLP_ENDPOINT` (the Axiom base URL), `OTEL_EXPORTER_OTLP_HEADERS` (auth + events dataset), `OTEL_EXPORTER_OTLP_METRICS_HEADERS` (auth + metrics dataset with the lowercase header), and `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`. The metrics-headers variable is the one that catches everyone — Axiom uses a different header key for metrics than for traces and logs.
+Set four environment variables on your RunPod endpoint. `OTEL_EXPORTER_OTLP_HEADERS` covers both traces and logs (they share the Events dataset); `OTEL_EXPORTER_OTLP_METRICS_HEADERS` overrides for metrics only because Axiom uses a different header for its metrics ingest.
 
 Paste this into your endpoint's **Environment Variables** section in the RunPod dashboard, substituting your token and dataset names:
 
 ```sh
 OTEL_EXPORTER_OTLP_ENDPOINT=https://api.axiom.co
-OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer xat-YOUR-TOKEN,X-AXIOM-DATASET=mineru-events
-OTEL_EXPORTER_OTLP_METRICS_HEADERS=Authorization=Bearer xat-YOUR-TOKEN,x-axiom-metrics-dataset=mineru-metrics
+OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer xaat-YOUR-TOKEN,x-axiom-dataset=mineru-events
+OTEL_EXPORTER_OTLP_METRICS_HEADERS=Authorization=Bearer xaat-YOUR-TOKEN,x-axiom-metrics-dataset=mineru-metrics
 OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 ```
 
-Three details that trip people up:
+How the SDK routes each signal:
 
-**Base URL, not the full path.** Set the endpoint to `https://api.axiom.co`, not `https://api.axiom.co/v1/traces`. The [OpenTelemetry Python SDK](https://opentelemetry-python.readthedocs.io/en/latest/exporter/otlp/otlp.html) appends `/v1/traces`, `/v1/logs`, `/v1/metrics` per signal automatically. If you set the full path, the SDK double-appends and Axiom returns 404. EU customers use `https://api.eu.axiom.co`.
+- **Traces + logs** → use the generic `OTEL_EXPORTER_OTLP_HEADERS`, so spans and log records both land in the `mineru-events` dataset.
+- **Metrics** → `OTEL_EXPORTER_OTLP_METRICS_HEADERS` overrides for metrics only, with the distinct `x-axiom-metrics-dataset` header that Axiom's metrics ingest requires.
 
-**Header case differs by signal.** The events-dataset header is `X-AXIOM-DATASET` (uppercase, hyphenated). The metrics-dataset header is `x-axiom-metrics-dataset` (lowercase). This is the most common "why don't my metrics show up?" trap. If you copy the events headers into `OTEL_EXPORTER_OTLP_METRICS_HEADERS` as-is, your metrics land in the events dataset and Axiom's metrics view shows nothing.
+**The dataset names in the two `*-dataset` headers must exactly match the names you created in step 1, and your API token must have ingest scope on both.** This is the #1 source of "everything is configured but nothing shows up" — `mineru-events` and `mineru-metrics` above are example names, not magic strings. If you named your datasets differently, update the headers to match. Mismatches surface as `404 Not Found` (wrong dataset name) or `403 Forbidden` (token lacks ingest scope on that dataset). Both fail silently from the caller's side; the only signal is in the worker's stdout, where the OTel SDK logs each retry with the HTTP status code.
+
+Four details that trip people up:
+
+**Region matters — use the right base URL.** Your workspace is in either the US region (`https://api.axiom.co`) or the EU region (`https://api.eu.axiom.co`). Check yours in the Axiom UI: **Settings → General** shows the workspace region. Using the wrong region for your workspace makes Axiom return `HTTP 400 {"code":400,"message":"mismatched region"}` on every export — and the OTel SDK logs only the HTTP code, not the message, so you'll just see endless `Failed to export ... code: 400` in the worker stdout with no clue why. This caught me on my own workspace and cost an hour of debugging.
+
+**Base URL, not the full path.** Set the endpoint to the region root (`https://api.axiom.co` or `https://api.eu.axiom.co`), not `https://api.axiom.co/v1/traces`. The [OpenTelemetry Python SDK](https://opentelemetry-python.readthedocs.io/en/latest/exporter/otlp/otlp.html) appends `/v1/traces`, `/v1/logs`, `/v1/metrics` per signal automatically. If you set the full path, the SDK double-appends and Axiom returns 404.
+
+**Header case differs by signal.** Events ingest uses `x-axiom-dataset`. Metrics ingest uses `x-axiom-metrics-dataset` (different header name, with `-metrics-` in it). Copying the events headers into `OTEL_EXPORTER_OTLP_METRICS_HEADERS` as-is sends metrics to the events dataset and Axiom's metrics view stays empty.
 
 **Protocol must be protobuf for metrics.** Axiom's metrics ingest accepts only protobuf, not JSON. The `http/protobuf` value above is the default the SDK ships with; don't override it to `http/json` thinking it's the safer choice. JSON works for logs and traces but quietly drops metrics.
 
@@ -77,19 +84,25 @@ Save the variables, redeploy any active workers (or wait for the next cold start
 
 ## How do I verify OpenTelemetry data is reaching Axiom?
 
-Send one request to the worker, then check three views in the Axiom UI: **Stream** on the events dataset for logs, **Traces** for one trace per job with child spans, and **Metrics** on the metrics dataset for the catalog. If traces and logs land but metrics don't, the metrics-headers env var is almost certainly wrong.
+Send one request to the worker, then check three views in the Axiom UI: **Stream** and **Traces** on the events dataset, and **Metrics** on the metrics dataset.
 
 In the Axiom UI:
 
 - **Stream** view → set dataset = `mineru-events` → you should see JSON log records flowing as soon as the worker handles a request. Each carries `service.name=mineru-runpod`, `runpod.endpoint_id=<your-endpoint>`, and `job_id` for correlation.
-- **Traces** view → one trace per RunPod job. The root span is `mineru.job`. Its children are `mineru.fetch_input`, `mineru.parse`, and `mineru.package`. The `mineru.warmup` span shows up once per worker boot.
+- **Traces** view → on the same `mineru-events` dataset → one trace per RunPod job. The root span is `mineru.job`. Its children are `mineru.fetch_input`, `mineru.parse`, and `mineru.package`. The `mineru.warmup` span shows up once per worker boot.
 - **Metrics** view → set dataset = `mineru-metrics` → after the first 10-second flush you should see `mineru.jobs.total`, `mineru.job.duration`, the GPU memory gauges, and the rest of the [metric catalog](/mineru-runpod/guides/observability/#what-gets-emitted).
 
-If logs and traces land but the metrics view is empty: check `OTEL_EXPORTER_OTLP_METRICS_HEADERS` for the lowercase `x-axiom-metrics-dataset` header. That's the single most common failure mode and I've personally hit it twice.
+If **nothing arrives in any view**, open the worker's stdout (RunPod dashboard → Logs) and grep for `Failed to export`. The OTel SDK logs each retry with the HTTP status code:
+
+- `Failed to export ... code: 404, reason: Not Found` — the dataset name in one of the `*-dataset` headers doesn't exist in your Axiom workspace. Rename the dataset or update the env var so they match.
+- `Failed to export ... code: 403, reason: Forbidden` — the dataset exists but your API token doesn't have ingest scope on it. Open the token in **Settings → API tokens**, add Ingest scope on the dataset, and update the secret in RunPod.
+- `Failed to export ... code: 400, reason: Bad Request` — the dataset resolves and auth works, but the payload is being rejected. **The #1 cause is region mismatch**: your workspace is in the EU but `OTEL_EXPORTER_OTLP_ENDPOINT` points at `https://api.axiom.co` (or vice versa). The SDK eats the response body so the worker stdout doesn't show *why* — confirm by running `curl -v POST https://api.axiom.co/v1/traces -H "Authorization: Bearer xaat-..." -H "x-axiom-dataset: <yours>" -H "Content-Type: application/x-protobuf" --data-binary "x"` against your endpoint; Axiom's response body will literally say `mismatched region` if that's the cause. Other 400 causes: wrong header name on metrics (use `x-axiom-metrics-dataset`, not `x-axiom-dataset`), or the dataset was created of the wrong type for the signal.
+- `Failed to export ... code: 401, reason: Unauthorized` — the API token is wrong or expired. Generate a fresh token in **Settings → API tokens** and update the env var.
+- No `Failed to export` lines AND no `[mineru-telemetry] init failed` either — `OTEL_EXPORTER_OTLP_ENDPOINT` is empty or the worker hasn't cold-started since you set it. RunPod env-var changes only take effect on the next cold start; warm workers keep the previous values.
 
 ## Which APL queries help debug a mineru-runpod worker?
 
-APL queries against the events dataset answer the three operational questions that come up most: which errors fired in the last hour, which parses are slowest, and how throughput breaks down by backend or endpoint. The queries below are starter templates — adjust attribute paths to match how your Axiom workspace unrolls OTLP resource and span attributes.
+APL queries answer the three operational questions that come up most: which errors fired in the last hour, which parses are slowest, and how throughput breaks down by backend or endpoint. All three queries hit the events dataset, where both traces and logs land. The templates below are starting points — adjust attribute paths to match how your Axiom workspace unrolls OTLP resource and span attributes.
 
 **Recent errors, grouped by error type:**
 
@@ -153,15 +166,15 @@ Yes. Axiom ingests OTLP/HTTP traces, logs, and metrics on `/v1/traces`, `/v1/log
 
 ### Why aren't my metrics showing up in Axiom?
 
-Eight times out of ten: `OTEL_EXPORTER_OTLP_METRICS_HEADERS` is set to the events headers (`X-AXIOM-DATASET=...`) instead of the metrics headers (`x-axiom-metrics-dataset=...`). The dataset key is different — lowercase, hyphenated, with `-metrics-dataset` in the name. The other 20% of the time: `OTEL_EXPORTER_OTLP_PROTOCOL` is set to `http/json` and Axiom's metrics endpoint accepts only protobuf.
+Three common causes. First: `OTEL_EXPORTER_OTLP_METRICS_HEADERS` uses the wrong header key. Axiom needs `x-axiom-metrics-dataset` (lowercase, with `-metrics-dataset`), distinct from the `x-axiom-dataset` header used for logs and traces. Second: the API token doesn't have ingest scope on the metrics dataset — common when you create the token with only the logs dataset selected, then later add the metrics one. Surfaces as `403 Forbidden` in the worker stdout. Third: `OTEL_EXPORTER_OTLP_PROTOCOL` is set to `http/json` and Axiom's metrics endpoint accepts only protobuf.
 
 ### What's the cheapest way to observe a RunPod serverless worker?
 
 For ≤1,000 jobs/day with structured logs at `info` level, Axiom's free tier (0.5 GB/month, 30-day retention) is the cheapest path with real query power. The OTel SDK is already in the mineru-runpod image; setup is four env vars on the endpoint. RunPod's own log dashboard is free but lacks query language, metrics, and traces — fine for triage, not for SLO tracking.
 
-### Can I send traces and logs to one Axiom dataset and metrics to another?
+### Can I send traces and logs to the same Axiom dataset?
 
-Yes, and that's the configuration this post documents. `OTEL_EXPORTER_OTLP_HEADERS` controls the default for all signals; `OTEL_EXPORTER_OTLP_METRICS_HEADERS` overrides only the metrics export. Axiom's metrics view requires the metrics-dataset storage format, so the split isn't optional if you want the metrics tab to work — keep events and metrics in separate Axiom datasets.
+Yes — that's the standard setup. Axiom exposes only two dataset types in the UI (Events and Metrics), and the Events type holds both traces and logs. The configuration above routes traces + logs to one events dataset via `OTEL_EXPORTER_OTLP_HEADERS`, and metrics to a separate metrics dataset via `OTEL_EXPORTER_OTLP_METRICS_HEADERS`. No per-signal traces override is needed.
 
 ### How much does OTLP/HTTP export add to cold start time?
 
@@ -173,7 +186,7 @@ No. The mineru-runpod worker uses the OpenTelemetry Python SDK with the OTLP/HTT
 
 ## Same template, different backend
 
-The four env vars above are the only Axiom-specific configuration in this whole setup. Swap the URL and headers and the mineru-runpod worker ships the same logs, traces, and metrics to anything that speaks OTLP/HTTP — Honeycomb, Grafana Cloud, Datadog's OTLP intake, your own OpenTelemetry Collector. The [observability guide](/mineru-runpod/guides/observability/) covers the vendor-neutral env-var layout and the metric catalog. Different backends, same template.
+The four env vars above are the only Axiom-specific configuration in this whole setup. Swap the URL and headers and the mineru-runpod worker ships the same logs, traces, and metrics to anything that speaks OTLP/HTTP — Honeycomb, Grafana Cloud, Datadog's OTLP intake, your own OpenTelemetry Collector. Most other backends don't even need the metrics-headers override that Axiom requires — a single `OTEL_EXPORTER_OTLP_HEADERS` value covers all three signals. The [observability guide](/mineru-runpod/guides/observability/) covers the vendor-neutral env-var layout and the metric catalog. Different backends, same template.
 
 If this saved you time, the easiest way to say thanks is [signing up for RunPod through this link](https://runpod.io?ref=31jdfpnq). Star the [repo on GitHub](https://github.com/sergeyshmakov/mineru-runpod) for updates.
 
