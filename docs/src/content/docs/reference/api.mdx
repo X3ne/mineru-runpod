@@ -205,7 +205,8 @@ When the handler raises or returns an error, the response sets `ok: false` and i
   "ok": false,
   "elapsed_seconds": 0.1,
   "mineru_version": "3.2.x",
-  "traceback": "Traceback (most recent call last):\n  File ..."
+  "traceback": "Traceback (most recent call last):\n  File ...",
+  "debug": {"gpu": {"...": "..."}, "model_dir": "...", "phase_ms": {"...": "..."}}
 }
 ```
 
@@ -216,6 +217,7 @@ When the handler raises or returns an error, the response sets `ok: false` and i
 | `elapsed_seconds` | float | Time before the error |
 | `mineru_version` | string | Version that was running |
 | `traceback` | string | Last 5 frames of the Python traceback; useful for debugging |
+| `debug` | object | Same shape as the success response — `gpu`, `model_dir`, and whatever `phase_ms` was collected before the failure |
 
 ## Progress updates (streaming)
 
