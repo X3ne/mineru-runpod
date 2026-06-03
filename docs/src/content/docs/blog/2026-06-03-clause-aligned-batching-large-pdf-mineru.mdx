@@ -1,0 +1,189 @@
+---
+title: "Clause-aligned batching for large PDFs on MinerU + RunPod"
+description: "How I parsed a 5,039-page standard on serverless MinerU: clause-boundary batching, R2 transport for huge output, and where single-GPU throughput caps."
+date: 2026-06-03
+authors: sergei
+tags:
+  - MinerU
+  - RunPod
+  - PDF parsing
+  - Batching
+  - Document AI
+  - Serverless
+---
+
+*Last Updated: 2026-06-03*
+
+[ECMA-376](https://ecma-international.org/publications-and-standards/standards/ecma-376/) Part 1 (the *Office Open XML File Formats — Fundamentals and Markup Language Reference*) is **5,039 pages** of dense, table-heavy, XML-schema-laden specification in a single 35 MB PDF. It is the document that defines `.docx`, `.xlsx`, and `.pptx` down to the attribute. If you want a machine-readable, clause-addressable version of it, you have to parse all 5,039 pages, and almost everything about that page count makes a naive approach fall over.
+
+This is the story of parsing the whole thing through the [mineru-runpod](https://github.com/sergeyshmakov/mineru-runpod) serverless worker. The headline result: **36 batches, 5,039 pages, 46,637 content blocks, 4,174 tables, full contiguous coverage, ~$1.5 of GPU time.** The interesting part is not the total. It's *how you cut a 5,000-page document into pieces without breaking it*, which it turns out is a decision about clause structure, not page numbers.
+
+## Why not just send the whole 5,000-page PDF?
+
+The worker accepts a `file_url` and parses front-to-back, so technically you could send all 5,039 pages as one job. You shouldn't, for four reasons that all get worse with size:
+
+- **All-or-nothing failure.** A single job that dies at page 4,800 (OOM, a transient GPU eviction, a timeout) costs you the entire run. At ~78 minutes of GPU work (more on that below), that's an expensive coin flip.
+- **No resumability.** One job has no natural checkpoint. If it fails you start over.
+- **The 20 MB response cap.** MinerU's output for a few hundred pages already blows past [RunPod's ~20 MB sync-response ceiling](/mineru-runpod/blog/runpod-20mb-response-cap-r2-bridge/). For 5,000 pages it isn't close: the extracted output here was **869 MB on disk**.
+- **Memory.** Holding the layout model output for thousands of pages in one process is a needless VRAM/RAM risk when the work is embarrassingly sliceable.
+
+Batching fixes all four, but only if you batch at the *right* boundaries.
+
+## Why cut at clause boundaries instead of every N pages?
+
+The obvious split is "every 100 pages." The problem: a standard isn't a stream of interchangeable pages, it's a tree of clauses. Clause §17.4 (Tables) might start three lines from the bottom of a page and run for 40 pages. If a batch boundary lands in the middle of it, you've torn a logical unit across two parse jobs, and every downstream step (clause extraction, cross-referencing, chunking for retrieval) has to stitch it back together.
+
+So I don't cut by page count. I cut by **clause**:
+
+1. Build an outline from the PDF's **4,600+ bookmarks**, giving a clause → page index for the whole document.
+2. Place batch boundaries **only at clause starts**, never mid-clause.
+3. Treat the huge top-level clauses (§17 WordprocessingML, §18 SpreadsheetML, §19 PresentationML, §20/§21 DrawingML, §22 Shared MLs, and the annexes) as **mandatory anchors**, so a big reference section always begins a fresh batch.
+4. Aim for ~100 pages per batch, allow up to ~200, and accept whatever the nearest clause boundary gives.
+
+The result was **36 batches averaging 140 pages** (smallest 66, largest 238). Every batch starts and ends on a clause edge, so no clause is ever split across the seam between two parse jobs.
+
+(One calibration gotcha specific to this PDF: printed page 1 is PDF page index 9. There's a 9-page front-matter offset you have to fold into the bookmark→page mapping or every boundary is off by nine.)
+
+A useful consequence: because the worker slices the PDF server-side via `start_page`/`end_page` (see the [API reference](/mineru-runpod/reference/api/)), **you never pre-split the PDF**. You upload it once and each batch job asks for its page range out of the same source file.
+
+## Did the batches actually cover the whole document?
+
+Yes, and this is worth verifying mechanically rather than trusting. After the run, I checked each batch's *produced* page span against its *planned* range and confirmed the batches tile the document with no gaps and no overlaps:
+
+| Metric | Value |
+|---|---|
+| Batches | 36 |
+| Pages | 5,039 (contiguous **0–5038**, 0 gaps, 0 overlaps) |
+| Content blocks | 46,637 |
+| Tables | 4,174 |
+| Code blocks | 3,591 |
+| Pages/batch | mean 140, min 66 (b35), max 238 (b25) |
+| Output downloaded | ~465 MB (compressed tarballs) |
+| Output on disk | 869 MB (extracted) |
+
+The contiguity check is the one piece of validation I wouldn't skip on a document this size: it's the difference between "the run finished" and "the run is complete."
+
+## How was the document transported in and out?
+
+Two different transports, for two different size problems.
+
+**Input: R2 URL.** At 35 MB the PDF is well over the 20 MB inline (`file_b64`) limit, so it can't ride in the request body. I put it on Cloudflare **R2** and passed a public URL as `file_url`. The worker downloads it (≤200 MB cap) and slices the requested pages itself. One upload, 36 jobs read from it.
+
+**Output: `transport="s3"`.** Per-batch output is large (the biggest batch produced a **32 MB** tarball), so embedding results in the sync response was out. With `transport="s3"`, the worker uploads each result `.tar.gz` back to R2 and returns a presigned URL the client downloads and extracts. The tarball carries everything: `content_list.json` (the flat, typed, page-indexed block list I treat as source of truth), the rendered markdown, `middle.json`, and a layout-overlay PDF.
+
+The presigned URL has a **1-hour TTL**, which has a real consequence for batching: you must download each batch's result *as its job finishes*, not in a sweep at the end of a 78-minute run. By then the early URLs have expired.
+
+## What GPU and backend, and what did throughput look like?
+
+Backend: `vlm-auto-engine` (MinerU 2.5 Pro, the `MinerU2.5-Pro-2605-1.2B` vision-language model) on a 24 GB AMPERE_24 (RTX A5000-class) serverless GPU. One parse per worker (`MINERU_MAX_CONCURRENCY=1`: vLLM's KV cache isn't safe to drive from concurrent parses on a 24 GB card). For how to pick a card, see [Choosing a GPU](/mineru-runpod/guides/choosing-gpu/).
+
+Across the 35 timed batches, total GPU compute was **4,674.8 s (77.9 min)** at an overall **1.04 pages/sec**, with individual batches ranging **0.84–1.27 pp/s** depending on table density. A few representative batches:
+
+| Batch | Clause | Pages | Worker time | pp/s |
+|---|---|---|---|---|
+| b00 | §1 Scope (front matter) | 176 | 145.0 s | 1.21 |
+| b01 | §17 WordprocessingML | 100 | 102.8 s | 0.97 |
+| b17 | §18.17.7 (functions) | 176 | 147.9 s | 1.19 |
+| b25 | §21.2 DrawingML – Charts | 238 | 231.8 s | 1.03 |
+| b32 | Annex L Primer | 102 | 80.2 s | 1.27 |
+
+Cost worked out to roughly **$0.0003/page, ~$1.5 for the whole standard**. Before committing to that, a **3-page smoke test** (cents, ~110–130 s dominated by cold start) validated the entire pipeline end-to-end (URL fetch → parse → R2 upload → download → extract), the cheapest insurance you can buy on a big run.
+
+## The parallelism lesson: it's RunPod-side, not in the worker
+
+This is the part that cost the most confusion: **a single batch is already parallelized inside the worker** (the VLM batches many page-images through the GPU at once), but **running multiple batches at once is a RunPod scaling decision, not something you trigger by submitting more jobs.**
+
+I learned this the hard way. The client submitted 3 batches concurrently, and RunPod ran exactly one while two sat in the queue. The endpoint was configured `workersMax=1`: one GPU worker, one batch at a time, no matter how many jobs you fire. Raising `workersMax` to 3 (and matching the client's concurrency) is what actually delivered 3×: the remaining 31 batches then finished in **27.8 minutes wall-clock**. The [scaling guide](/mineru-runpod/guides/scaling/) covers how concurrency and `workersMax` interact.
+
+The mental-model fix:
+
+- **Inside one job:** pages are parallelized on one GPU. Already maxed.
+- **`workersMax`:** how many separate GPUs run separate jobs at once. *This* is your throughput dial.
+
+A related myth worth busting: MinerU's pipeline logs mention a `window_size=64`. That is a **GPU throughput batch** (how many page-images stream through the model at a time to bound VRAM), **not a context window**. Pages are recognized independently regardless of it, so it has zero effect on content continuity across pages. Which is exactly *why* clause-aligned **batch** boundaries matter and the internal window size doesn't: continuity is something you protect at the batch layer, not by tuning a throughput knob.
+
+## Which clauses produced the most structure?
+
+Block and table counts track the content shape of the standard almost perfectly: the reference-material and function-catalog clauses dominate:
+
+| Batch | Clause | Blocks | Tables |
+|---|---|---|---|
+| b25 | §21.2 DrawingML – Charts | 2,829 | 378 |
+| b17 | §18.17.7 (spreadsheet functions) | 2,805 | 239 |
+| b26 | §22 Shared MLs | 2,509 | — |
+| b10 | §17.17 Miscellaneous | — | 238 |
+| b11 | §18 SpreadsheetML | — | 224 |
+
+These are the dense element/attribute reference tables that make ECMA-376 what it is. They're a good reminder to spot-check table fidelity on exactly these batches before trusting the output downstream.
+
+## The annex schema dumps look completely different
+
+The most striking per-batch contrast is the annexes. Annex A (W3C XML Schema), Annex B (RELAX NG) and friends are **long code listings**, not prose with tables, and the numbers show it. Same ~150-page batch size, radically smaller output:
+
+| Batch | Annex | Tarball |
+|---|---|---|
+| b29 | Annex B (RELAX NG) | 1.15 MB |
+| b30 | B.3 PresentationML | 1.75 MB |
+| b27 | Annex A (XML Schema) | 2.06 MB |
+| b28 | A.3 PresentationML | 2.23 MB |
+
+Compare that to the prose-and-table batches that ran **31–32 MB** (b10, b11) for a similar page count: roughly a 15× size difference driven entirely by content type. MinerU classifies the schema listings as code, so they compress to almost nothing relative to a table-dense reference section.
+
+## How did resumability actually work?
+
+The runner keeps a `manifest.json` keyed by batch, and writes each batch's result **atomically**: extract into a temporary directory, then rename into place. A batch is only marked `ok` after its download, extraction, and rename all succeed. Two payoffs:
+
+- **Pause/resume.** Midway through, I paused the run to raise `workersMax` (you don't want to change cluster settings while jobs are in flight). Stopping the client abandoned the in-flight jobs, but because their downloads hadn't completed, the manifest never marked them done, so resuming re-ran them. Completed batches were skipped. No corruption, no duplicate downloads.
+- **Crash recovery is free.** The same mechanism means any crash resumes from the last completed batch.
+
+For a 36-job run that you might interrupt, the resumable manifest is what turns "a long fragile script" into "a process you can walk away from."
+
+## Where this falls down / what I'd change
+
+Honest limitations:
+
+- **1-hour presign expiry forces eager download.** You cannot defer pulling results to the end of a long run; download each batch as it lands. My runner does this, but it's a constraint to design around, not a free lunch.
+- **Clause boundaries are only as good as the outline.** The whole scheme leans on the PDF's bookmark tree being accurate and complete. A document with missing or wrong bookmarks needs a fallback (TOC parsing, heading detection) before this works.
+- **Table/code fidelity needs spot-checking.** 4,174 tables and 3,591 code blocks is a lot of structure to trust blindly; the dense reference batches (b25, b17, b11) and the annex code dumps are where I'd sample-verify first.
+- **One GPU is the ceiling.** Throughput is fundamentally `workersMax × per-GPU rate`. There's no in-job trick to go faster: you pay for more workers or you wait. And more workers means more cold starts, so wall-clock and cost don't scale perfectly linearly.
+
+What I'd change next time: drive client concurrency directly from the endpoint's live `workersMax` so the two never drift, and prune the `middle.json` + layout PDF from batches where I only need `content_list.json`. They were roughly half the on-disk footprint.
+
+## FAQ
+
+### How long does it take to parse a 5,000-page PDF with MinerU?
+
+About 78 minutes of single-GPU compute (~1 page/sec on a 24 GB RTX A5000-class card with the VLM backend), or ~28 minutes of wall-clock at 3× worker concurrency. Cost is roughly $1.5 total at ~$0.0003/page.
+
+### Why batch at clause boundaries instead of fixed page counts?
+
+So no logical unit is split across two parse jobs. A clause can start mid-page and span dozens of pages; cutting by page count tears it in half and forces every downstream step to reassemble it. Cutting at clause starts keeps each clause whole within a batch.
+
+### How do you handle output larger than RunPod's 20 MB response cap?
+
+Use `transport="s3"`: the worker uploads each result tarball to an S3-compatible bucket (Cloudflare R2 here) and returns a presigned URL you download. Per-batch output here reached 32 MB, far past the sync-response ceiling.
+
+### Does sending more concurrent jobs make a single endpoint faster?
+
+No. Concurrency above the endpoint's `workersMax` just fills the queue. Parallelism is the number of GPU workers RunPod runs, set by `workersMax`. Raise that to go wider.
+
+### Do I need to split the PDF before uploading?
+
+No. Upload the full PDF once (or host it on R2 and pass `file_url`); each batch job requests its page range via `start_page`/`end_page` and the worker slices server-side.
+
+### How do I know the whole document was covered?
+
+Verify mechanically: check each batch's produced page span against its planned range and confirm the batches tile the document with zero gaps and zero overlaps. "The run finished" and "the run is complete" are not the same claim.
+
+## Where to next
+
+The output is 36 batches of `content_list.json` with page-indexed, typed blocks. The next step is joining each block's page back to the clause outline to emit a clause-addressable tree (one compact file per clause) that an agent or a retrieval index can navigate. The clause-aligned batching is what makes that join clean: every block already lives inside exactly one clause's batch.
+
+ECMA-376 is freely available from [Ecma International](https://ecma-international.org/publications-and-standards/standards/ecma-376/); it's used here purely as a parsing benchmark. The parsed corpus is kept in a private repository for internal use, and this post shares only the parsing process and aggregate statistics, not the standard's content.
+
+If you want per-phase timings (fetch / parse / package) and throughput dashboards for a run like this, the worker can ship OpenTelemetry traces and metrics to any OTLP backend. See the [observability guide](/mineru-runpod/guides/observability/).
+
+If this saved you time, the easiest way to say thanks is [signing up for RunPod through this link](https://runpod.io?ref=31jdfpnq). Star the [repo on GitHub](https://github.com/sergeyshmakov/mineru-runpod) for updates.
+
+* * *
+<small><strong>Disclosure:</strong> RunPod links in this post use a referral code that credits me at no cost to you. The post would read the same without it.</small>
