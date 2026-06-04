@@ -1,0 +1,138 @@
+---
+title: "Structuring MinerU output into a clean doc tree"
+description: "Part 2: turning MinerU's content_list.json into a clean, cross-linked, verified Markdown tree. The rendering fixes, structuring rules, and a two-signal OCR check."
+date: 2026-06-04
+authors: sergei
+tags:
+  - MinerU
+  - RunPod
+  - PDF parsing
+  - Document AI
+  - Post-processing
+  - Markdown
+---
+
+*Last Updated: 2026-06-04*
+
+In [part 1](/mineru-runpod/blog/clause-aligned-batching-large-pdf-mineru/) I parsed the whole 5,039-page ECMA-376 Part 1 standard with [MinerU](https://github.com/opendatalab/MinerU) on [RunPod](https://runpod.io?ref=31jdfpnq): 36 clause-aligned batches, about $1.15 of GPU time, out came **36 `content_list.json` files**. That's where most write-ups stop. Parsed is not the same as usable. A vision-language model hands you a flat stream of typed blocks with OCR quirks and no document structure. For a coding agent to answer "what does `§17.9.4 isLgl` (legal numbering) say?" it needs *one small, faithful, addressable file*, not a 200-page batch of blocks.
+
+This post is the post-processing half: cleaning, structuring, cross-linking, and verifying the output. The whole thing is distilled into a small, document-agnostic toolkit you can run on your own MinerU output: **[`examples/doc-structuring/`](https://github.com/sergeyshmakov/mineru-runpod/tree/main/examples/doc-structuring)** (start with the [README](https://github.com/sergeyshmakov/mineru-runpod/blob/main/examples/doc-structuring/README.md)).
+
+End state: **5,039 pages became 9,948 Markdown files**, every section addressable, ~7,900 cross-references turned into relative links, and every tag and attribute name verified against the official schema *and* the source PDF.
+
+## What does MinerU's content_list.json actually give you?
+
+A flat, page-ordered list of typed blocks: `text` (with an optional `text_level` for headings), `list`, `table` (HTML in `table_body`), `code` (in `code_body`, not `text`), `equation`, and `image` (with a VLM `content` description). Mixed in is `page_number`/`header` noise. No tree, no cross-reference graph, and a long tail of OCR artifacts.
+
+That shape is fine for a quick read. It's wrong for retrieval. Three jobs turn it into something an agent can navigate: rebuild the structure, render each block faithfully to Markdown, and verify the names didn't get garbled on the way through the model. Everything below is generic; nothing in the toolkit knows about ECMA-376 specifically.
+
+## How do you rebuild the document structure?
+
+The blocks arrive in reading order, so structure is just segmenting that stream by heading. A single forward walk does it: each block belongs to the section whose heading appeared most recently. Boundaries are only ever set by a real heading, so a section can never steal a neighbour's content. You inject one callback, `heading_id(block)`, where all your domain logic lives.
+
+That callback is the only place document specifics enter: numbered headings, styled `text_level` lines, the occasional heading MinerU buried inside a code caption. The forward walk is the part that doesn't break, because it has no notion of page or position to get wrong. The segmenter lives in [`segment.py`](https://github.com/sergeyshmakov/mineru-runpod/blob/main/examples/doc-structuring/segment.py).
+
+Then the tree itself ([`tree.py`](https://github.com/sergeyshmakov/mineru-runpod/blob/main/examples/doc-structuring/tree.py)):
+
+- a section **with** sub-sections becomes a folder plus a barrel file (`*-0-index.md`) holding its intro prose and a child index;
+- a leaf becomes **one file**. The golden rule: never split a leaf into parts.
+- an agent walks root → barrel → barrel → leaf, reading one small index per level instead of one giant batch.
+
+Naming encodes the section id plus a short slug (`17-4-37-tbl-table.md`), so any clause is glob-findable and the camelCase tag (`instrText`) survives for a regex lookup.
+
+## Why is the rendering the hard part?
+
+Because faithful Markdown is where every MinerU artifact bites. The structuring is a clean algorithm; the rendering is a pile of special cases, each one traced to a real defect on this run. Skip any of them and the content silently corrupts: examples render empty, tables lose columns, prose gets promoted to a heading.
+
+Every fix in [`render.py`](https://github.com/sergeyshmakov/mineru-runpod/blob/main/examples/doc-structuring/render.py) earned its place:
+
+- **Code lives in `code_body` (pre-fenced) and `code_caption`, not `text`.** Miss this and all 3,591 XML examples render *empty*.
+- **`[Example: … end example]` markers** have to bracket the code. They routinely land before or inside the fence.
+- **Page-split code halves** (one example broken across a page) sit directly adjacent, so merge them. Genuinely separate examples have prose between them, so they're left alone.
+- **Mislabelled fences** (```txt`/`asp`/`hcl that actually hold XML) get relabelled to ```xml`, but only when the body has namespaced tags, so a text-output example stays text.
+- **Tables**: HTML to Markdown. Inline XML examples wrapped as `$<w:…>$` math get deleted by naive tag-stripping unless you protect them. Fully-empty illustration columns get dropped.
+- **Lists**: no doubled bullets (`- - foo`), and ordered items keep their numbers.
+- **A long or sentence-ending `text_level` block is figure text or prose, not a heading.** Don't render it as `##`.
+- `$§17.4.62$`-wrapped references and `\-` escaped-dash bullets get normalized.
+
+None of these are exotic. They're just what VLM output looks like at scale, and each one quietly damages content if you skip it.
+
+## How do you cross-link a densely-referenced spec?
+
+ECMA-376 cites itself constantly (`§17.9.11`, `ST_Jc (§17.18.44)`, and on). Two moves in [`crosslink.py`](https://github.com/sergeyshmakov/mineru-runpod/blob/main/examples/doc-structuring/crosslink.py): normalize every reference to one canonical `§N.N.N` form so a single regex collects them all, then turn each resolvable one into a relative Markdown link to the target's file or barrel.
+
+The regex is `§(\d+(?:\.\d+)*|[A-Z](?:\.\d+)+)`, which catches both numbered clauses and lettered annexes and gives you the citation graph for free. Links are relative on purpose: they're computed section-to-section *within the tree*, so they stay valid wherever you mount it. No host path baked in, no rewrite on move. On this run, **7,877 of 7,959 references (98%)** became working relative links.
+
+## How do you verify the parse is actually correct?
+
+Two independent signals, both in [`verify.py`](https://github.com/sergeyshmakov/mineru-runpod/blob/main/examples/doc-structuring/verify.py). First, a vocabulary check: build the canonical set of element, attribute, and type names plus enum values straight from the official XSDs, then flag any name in the tree that isn't in it but closely resembles one. Second, a source cross-check against the PDF text layer, which is the definitive one.
+
+The vocabulary check (`Vocabulary.from_xsd([...])`) is fast and needs no PDF. It catches the obvious garbles: `fontAlign` when the schema only knows `fontAlgn`. But it misses the nasty case where a misread happens to spell a *different* real name.
+
+That's what the source cross-check is for. A name a file uses that is absent from that section's own PDF page, while a near-miss correct name *is* present, is a confirmed garble. The PDF text layer is independent ground truth. This catches `algn` misread as `align`: `align` is a real element elsewhere, so it passes the vocabulary check, but on the actual page the source says `algn`. The check is bounded, each token is tested only against its section's pages and deduped, so there's no whole-document scan and no processing hole.
+
+Confirmed garbles feed a vetted correction map ([`corrections.py`](https://github.com/sergeyshmakov/mineru-runpod/blob/main/examples/doc-structuring/corrections.py)), applied scoped to name contexts so a garble that collides with a real name is corrected only as an attribute, never as an element. Re-run the verifier and it reports zero. On this run that fixed a consistent `align→algn` / `fontAlign→fontAlgn` class across DrawingML, plus `displacedByCustomXML`, `t12br→tl2br`, `subseted`, and more, each confirmed against the PDF before it was applied.
+
+## Why replace OCR'd schema dumps instead of correcting them?
+
+Because for the annexes you already have the real source, so OCR is the wrong input. The annexes are machine-generated schema listings (the full XSD and RELAX-NG for the formats). MinerU OCR'd them like everything else, producing the same garbles: `CT_Placelder` for `CT_Placeholder`, underscores read as spaces, a dangling fragment where a split cut mid-element. The real schema files exist, so swap them in.
+
+The generic core is [`schema.py`](https://github.com/sergeyshmakov/mineru-runpod/blob/main/examples/doc-structuring/schema.py). Index every declaration in the official `.xsd`/`.rnc`, work out which schema file each annex dump came from (highest declaration-name overlap), and replace each parsed declaration with the authoritative one, matched by name then kind, exact → case-insensitive → fuzzy. The authoritative *kind* even drives the output folder and filename, so a mis-named OCR fragment self-corrects on rebuild. Result: **99.8% (5,699 of 5,710) declarations replaced**. The ~11 too garbled to match confidently keep their OCR text.
+
+## How do you close the long tail of one-off OCR damage?
+
+The residue is per-instance damage that won't generalize into a correction map: a `\@` date-switch read as `$@$`, a `<` read as `#`, a dropped `)`, glued attribute names. Past a point, stop writing heuristics. Let agents propose fixes and gate every one of them on the source PDF.
+
+I ran an adversarial multi-agent fan-out. The worklist was ~100 items: every `§17.16.5` field clause, enum truncations found by diffing the rendered table against the authoritative XSD, and the named defects. Each item carried its PDF ground truth. About 130 agents proposed fixes, and only **PDF-verified** ones were accepted: 41 patches, zero that the build couldn't apply.
+
+They live as a per-section overlay ([`apply_overlay`](https://github.com/sergeyshmakov/mineru-runpod/blob/main/examples/doc-structuring/corrections.py)) applied *last*, so each `find` matches the on-disk text and a stale one gets reported on the next rebuild rather than vanishing silently. After all of it, `verify_against_pdf` reports **0 actionable garbles**. The 11 it still flags were each reviewed against the PDF as genuine, distinct OOXML names (`useFirstPageNumber` *and* `firstPageNumber` both exist; `o:cname` confirmed on p4968) and recorded as benign.
+
+## What does the finished tree look like?
+
+| | |
+|---|---|
+| Source | 5,039 pages, 36 MinerU batches |
+| Output | **9,948 Markdown files** (4,245 leaf clauses, 356 barrels, 5,130 split schema declarations, 1 root index) |
+| Cross-references linked | **7,877 / 7,959 (98%)**, relative |
+| Verification | names vs official XSD vocab (2,058 elements + 1,806 attributes) **and** vs the source PDF text layer |
+
+The full worked wiring is [`example_pipeline.py`](https://github.com/sergeyshmakov/mineru-runpod/blob/main/examples/doc-structuring/example_pipeline.py). Note how little domain code it is: an outline loader, a heading detector, a naming scheme, a reference regex, and a correction map, all driven by CLI flags with nothing hard-coded. Everything else is the library.
+
+## Where does this fall down?
+
+Honest limits, because the toolkit isn't magic:
+
+- **The long tail is OCR, not logic**, and verification closes it, not more regex. The systematic fixes get you most of the way, the authoritative-schema swap handles the annexes, and the per-instance residue is closed by the adversarial fan-out where every proposed edit is gated by the source PDF before it lands.
+- **Verification needs a schema and a text-layer PDF.** Without an authoritative vocabulary you lose the first signal; without a real text layer (a scanned PDF) you lose the second.
+- **Structure quality equals outline quality.** The tree is only as good as the section hierarchy you feed it, here the PDF bookmarks. Garbage outline, garbage tree.
+
+## FAQ
+
+### Isn't MinerU's Markdown output enough?
+
+For reading, sometimes. For an addressable, agent-navigable, verified corpus, no. You need structure (the tree), a citation graph (the cross-links), and verification against ground truth. That's the post-processing this toolkit does on top of what MinerU emits.
+
+### Why a per-section PDF cross-check instead of just trusting the schema?
+
+Because a garble can collide with a valid name elsewhere (`align` is a real element), so the schema vocabulary alone passes it. The source page is the only authority on which name belongs *here*. Scoping the check to the section's own pages keeps it cheap.
+
+### Do I have to use it on ECMA-376?
+
+No, it's document-agnostic. Supply your own `Section` hierarchy and a few callbacks and it runs on any MinerU output. See the [README](https://github.com/sergeyshmakov/mineru-runpod/blob/main/examples/doc-structuring/README.md). ECMA-376 is just the worked example.
+
+### Relative or absolute cross-links?
+
+Relative, computed within the tree. They're identical wherever the tree is mounted, so the output ships anywhere with zero rewriting.
+
+### What block types does content_list.json contain?
+
+`text` (with an optional `text_level` for headings), `list`, `table` (HTML in `table_body`), `code` (in `code_body`), `equation`, and `image` (with a VLM `content` description), plus `page_number` and `header` noise you filter out.
+
+### How do you handle code that MinerU split across a page?
+
+The two halves arrive directly adjacent in the block stream, so merge adjacent code blocks. Genuinely separate examples always have prose between them, so they're left untouched.
+
+If this saved you time, the easiest way to say thanks is [signing up for RunPod through this link](https://runpod.io?ref=31jdfpnq). Star the [repo on GitHub](https://github.com/sergeyshmakov/mineru-runpod) for updates.
+
+* * *
+<small><strong>Disclosure:</strong> RunPod links in this post use a referral code that credits me at no cost to you. The post would read the same without it.</small>
