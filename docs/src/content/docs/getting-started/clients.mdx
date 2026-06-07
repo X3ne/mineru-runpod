@@ -3,15 +3,32 @@ title: Clients
 description: Two ways to call your mineru-runpod endpoint. The Python MineruClient for quick starts, and the direct RunPod SDK / HTTP API for production.
 ---
 
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
 The worker template ships a Python wrapper (`mineru_client`) for convenience, but the actual API is the JSON payload contract that the handler accepts. You can hit the endpoint from any language. This page covers the two main paths and when to pick each.
 
 ## Path A: Quick start with `MineruClient`
 
 A small Python wrapper that lives in this repo. Best for prototyping, single-user scripts, and Python projects that don't yet need async submission or custom retry behaviour.
 
+<Tabs syncKey="installer">
+<TabItem label="pip">
+
 ```powershell
-pip install "mineru-client @ git+https://github.com/sergeyshmakov/mineru-runpod@v1.1.0"
+pip install "mineru-client @ git+https://github.com/sergeyshmakov/mineru-runpod"
 ```
+
+</TabItem>
+<TabItem label="uv">
+
+```powershell
+uv pip install "mineru-client @ git+https://github.com/sergeyshmakov/mineru-runpod"
+```
+
+</TabItem>
+</Tabs>
+
+Inside a uv-managed project, use `uv add` instead — same git reference, but it records the dependency in your `pyproject.toml` and lockfile.
 
 ```python
 from mineru_client import MineruClient

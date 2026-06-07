@@ -32,7 +32,7 @@ The worker accepts any of these formats — PDF, image (PNG/JPEG/GIF/BMP/TIFF/We
 
 | Field | Type | Notes |
 |---|---|---|
-| `file_url` | string | Public or presigned HTTP/HTTPS URL the worker can `GET` |
+| `file_url` | string | Public or presigned HTTP/HTTPS URL the worker can `GET`. Downloaded server-side with a 200 MB cap and a 120 s timeout |
 | `file_b64` | string | Base64-encoded file bytes. RunPod's gateway caps payloads at 10 MB on `/run` and 20 MB on `/runsync`; for bigger files use `file_url` or `volume_path` |
 | `volume_path` | string | Absolute path to a file inside the container. Useful for files mounted via a RunPod network volume or baked into the image |
 
@@ -50,6 +50,7 @@ The worker accepts any of these formats — PDF, image (PNG/JPEG/GIF/BMP/TIFF/We
 | `transport` | string | `"tarball_b64"` | How the worker ships output. `"tarball_b64"` (default, base64-encoded .tar.gz inside the entry), `"inline"` (per-format keys inside the entry, filterable via `formats`), or `"s3"` (presigned URL — requires `BUCKET_*` env vars on the endpoint). See [Output modes](/mineru-runpod/guides/output-modes/). |
 | `formats` | array of string | all four | Subset of `["markdown", "content_list", "middle", "images"]`. Selects which artifacts the inline payload contains. Omit (or pass all four) to get everything. **No-op for `tarball_b64` and `s3`** — those transports always ship a self-contained archive with all four artifacts. Empty list is rejected. |
 | `basename` | string | `"doc"` | Filename stem for output files. Must be alphanumeric with `-` or `_` |
+| `probe` | bool | `false` | Diagnostic mode. `{"probe": true}` skips parsing and every field above, then returns the worker's filesystem layout plus the running MinerU version instead of a parse result — for checking baked model paths and volume mounts. |
 
 ## I just want the Markdown — how do I get it?
 

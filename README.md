@@ -53,7 +53,11 @@ Accepts PDF, image (PNG/JPEG/GIF/BMP/TIFF/WebP), DOCX, PPTX, XLSX. Two orthogona
 A small Python wrapper that lives in this repo. Best for prototyping and single-user scripts.
 
 ```powershell
-pip install "mineru-client @ git+https://github.com/sergeyshmakov/mineru-runpod@v1.1.0"
+# pip
+pip install "mineru-client @ git+https://github.com/sergeyshmakov/mineru-runpod"
+
+# or uv
+uv pip install "mineru-client @ git+https://github.com/sergeyshmakov/mineru-runpod"
 ```
 
 ```python
