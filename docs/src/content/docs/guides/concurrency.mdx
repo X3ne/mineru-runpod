@@ -35,7 +35,7 @@ Client-side concurrency only helps up to `workers_max × MINERU_MAX_CONCURRENCY`
 
 For almost every workload, **horizontal scaling is the right dial.** Each worker is an isolated container with its own 24 GB GPU and its own model copy, peaking ~13 GiB on a single parse (see [Choosing a GPU](/mineru-runpod/guides/choosing-gpu/)). Raising `workers_max` adds full-speed parallel parses with no shared-memory risk. Cost scales linearly with worker-seconds; the only downside is more cold starts, mitigated by [FlashBoot](/mineru-runpod/guides/scaling/#flashboot).
 
-This is how the [5,039-page batching run](/mineru-runpod/blog/clause-aligned-batching-large-pdf-mineru/) hit 3× throughput: `workers_max=3`, `MINERU_MAX_CONCURRENCY=1`, 36 page-range jobs fanned across three 24 GB workers.
+This is how the [5,039-page batching run](/mineru-runpod/blog/2026-06-03-clause-aligned-batching-large-pdf-mineru/) hit 3× throughput: `workers_max=3`, `MINERU_MAX_CONCURRENCY=1`, 36 page-range jobs fanned across three 24 GB workers.
 
 ### Niche: in-worker concurrency
 
