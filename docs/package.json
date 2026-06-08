@@ -13,9 +13,9 @@
 		"check-links": "remark --ext mdx --frail --quiet --no-stdout src/content/"
 	},
 	"dependencies": {
-		"@astrojs/sitemap": "^3.5.0",
-		"@astrojs/starlight": "^0.39.2",
-		"astro": "^6.0.0",
+		"@astrojs/sitemap": "^3.7.3",
+		"@astrojs/starlight": "^0.39.3",
+		"astro": "^6.4.4",
 		"sharp": "^0.34.0",
 		"starlight-blog": "^0.26.1"
 	},
