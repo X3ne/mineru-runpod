@@ -63,18 +63,19 @@ RUN pip install --no-cache-dir uv
 COPY requirements.txt /worker/requirements.txt
 RUN uv pip install --system --no-cache -r requirements.txt
 
-# Bake both MinerU model dependencies into the image at /root/.cache/huggingface
-# (HF's default cache path). Runs AFTER pip install so huggingface_hub is
-# available, and BEFORE the handler.py COPY so iterating on handler code
-# doesn't bust these layers.
+# Bake the VLM model into the image at /root/.cache/huggingface (HF's default
+# cache path). Runs AFTER pip install so huggingface_hub is available, and
+# BEFORE the handler.py COPY so iterating on handler code doesn't bust this
+# layer.
 #
-# - MinerU2.5-Pro-2605-1.2B: the VLM backend's model
-# - PDF-Extract-Kit-1.0: the pipeline backend's OCR + layout + formula +
-#   table models
+# - MinerU2.5-Pro-2605-1.2B: the VLM backend's model (vlm-auto-engine).
 #
-# Split into two RUN layers (one per model) so a partial failure or a
-# bump to a single model only re-downloads that model, not both. The
-# ~30-minute RunPod build ceiling makes this resilience valuable.
+# The pipeline backend's model set (opendatalab/PDF-Extract-Kit-1.0, ~2-3 GB)
+# is NOT baked: this worker only serves the VLM backends. Baking it doubled the
+# build's model-download time and pushed the image past RunPod's ~30-minute
+# build ceiling, leaving workers stuck on "image pull: ... pending". If you
+# need the `pipeline` / `hybrid-*` backends, re-add the snapshot_download for
+# PDF-Extract-Kit-1.0 below and budget for the larger image.
 #
 # HF_XET_HIGH_PERFORMANCE=1 tells the Xet backend (hf-xet, pinned in
 # requirements.txt) to saturate the build node's network bandwidth and
@@ -91,10 +92,6 @@ RUN uv pip install --system --no-cache -r requirements.txt
 RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 HF_XET_HIGH_PERFORMANCE=1 \
     python3 -c "from huggingface_hub import snapshot_download; \
     snapshot_download(repo_id='opendatalab/MinerU2.5-Pro-2605-1.2B')"
-# hadolint ignore=DL3059
-RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 HF_XET_HIGH_PERFORMANCE=1 \
-    python3 -c "from huggingface_hub import snapshot_download; \
-    snapshot_download(repo_id='opendatalab/PDF-Extract-Kit-1.0')"
 
 # Copy the worker code last so iterating on it doesn't bust the pip or
 # model-cache layers. handler.py is the entry point; the worker/ package
